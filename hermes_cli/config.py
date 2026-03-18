@@ -65,9 +65,9 @@ from hermes_cli.colors import Colors, color
 from hermes_cli.default_soul import DEFAULT_SOUL_MD
 
 
-# =============================================================================
+# 
 # Managed mode (NixOS declarative config)
-# =============================================================================
+# 
 
 _MANAGED_TRUE_VALUES = ("true", "1", "yes")
 _MANAGED_SYSTEM_NAMES = {
@@ -151,9 +151,9 @@ def managed_error(action: str = "modify configuration"):
     print(format_managed_message(action), file=sys.stderr)
 
 
-# =============================================================================
+# 
 # Container-aware CLI (NixOS container mode)
-# =============================================================================
+# 
 
 def get_container_exec_info() -> Optional[dict]:
     """Read container mode metadata from HERMES_HOME/.container-mode.
@@ -200,9 +200,9 @@ def get_container_exec_info() -> Optional[dict]:
     }
 
 
-# =============================================================================
+# 
 # Config paths
-# =============================================================================
+# 
 
 # Re-export from hermes_constants — canonical definition lives there.
 from hermes_constants import get_hermes_home  # noqa: F811,E402
@@ -339,9 +339,9 @@ def _ensure_hermes_home_managed(home: Path):
     _ensure_default_soul_md(home)
 
 
-# =============================================================================
+# 
 # Config loading/saving
-# =============================================================================
+# 
 
 DEFAULT_CONFIG = {
     "model": "",
@@ -456,24 +456,35 @@ DEFAULT_CONFIG = {
 
     },
 
+
     # AWS Bedrock provider configuration.
     # Only used when model.provider is "bedrock".
     "bedrock": {
         "region": "",  # AWS region for Bedrock API calls (empty = AWS_REGION env var → us-east-1)
         "discovery": {
-            "enabled": True,           # Auto-discover models via ListFoundationModels
-            "provider_filter": [],     # Only show models from these providers (e.g. ["anthropic", "amazon"])
-            "refresh_interval": 3600,  # Cache discovery results for this many seconds
+            "enabled": True,
+            "provider_filter": [],
+            "refresh_interval": 3600,
         },
         "guardrail": {
-            # Amazon Bedrock Guardrails — content filtering and safety policies.
-            # Create a guardrail in the Bedrock console, then set the ID and version here.
-            # See: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html
-            "guardrail_identifier": "",  # e.g. "abc123def456"
-            "guardrail_version": "",     # e.g. "1" or "DRAFT"
-            "stream_processing_mode": "async",  # "sync" or "async"
-            "trace": "disabled",         # "enabled", "disabled", or "enabled_full"
+            "guardrail_identifier": "",
+            "guardrail_version": "",
+            "stream_processing_mode": "async",
+            "trace": "disabled",
         },
+    },
+
+    "camel_guard": {
+        "enabled": True,
+        "mode": "enforce",  # off | monitor | enforce
+        "wrap_untrusted_tool_results": True,
+    },
+    "smart_model_routing": {
+        "enabled": False,
+        "max_simple_chars": 160,
+        "max_simple_words": 28,
+        "cheap_model": {},
+    },
     },
 
     # Auxiliary model config — provider:model for each side task.
@@ -837,9 +848,9 @@ DEFAULT_CONFIG = {
     "_config_version": 21,
 }
 
-# =============================================================================
+# 
 # Config Migration System
-# =============================================================================
+# 
 
 # Track which env vars were introduced in each config version.
 # Migration only mentions vars new since the user's previous version.
@@ -2032,9 +2043,9 @@ def check_config_version() -> Tuple[int, int]:
     return current, latest
 
 
-# =============================================================================
+# 
 # Config structure validation
-# =============================================================================
+# 
 
 # Fields that are valid at root level of config.yaml
 _KNOWN_ROOT_KEYS = {
@@ -3428,9 +3439,9 @@ def get_env_value(key: str) -> Optional[str]:
     return env_vars.get(key)
 
 
-# =============================================================================
+# 
 # Config display
-# =============================================================================
+# 
 
 def redact_key(key: str) -> str:
     """Redact an API key for display."""
@@ -3726,9 +3737,9 @@ def set_config_value(key: str, value: str):
     print(f"✓ Set {key} = {value} in {config_path}")
 
 
-# =============================================================================
+# 
 # Command handler
-# =============================================================================
+# 
 
 def config_command(args):
     """Handle config subcommands."""
