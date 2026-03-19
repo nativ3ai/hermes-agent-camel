@@ -1,6 +1,6 @@
 import json
 
-from agent.camel_guard import CamelGuard, CamelGuardConfig
+from agent.camel_guard import CamelGuard, CamelGuardConfig, normalize_camel_guard_mode
 
 
 def _make_guard() -> CamelGuard:
@@ -93,3 +93,10 @@ def test_system_control_user_messages_do_not_pollute_trusted_history():
         "Run the tests and summarize failures.",
         "Continue.",
     ]
+
+
+def test_normalize_camel_guard_mode_supports_runtime_aliases():
+    assert normalize_camel_guard_mode("on") == "enforce"
+    assert normalize_camel_guard_mode("monitor") == "monitor"
+    assert normalize_camel_guard_mode("legacy") == "off"
+    assert normalize_camel_guard_mode("off") == "off"
