@@ -9,6 +9,26 @@ This fork is designed for operators who want the Hermes agent loop to distinguis
 
 Sensitive tools are authorized against a trusted operator plan instead of instructions embedded in untrusted content.
 
+## Research Provenance
+
+This fork is inspired by Google Research's CaMeL paper and reference repository:
+
+- Paper: https://arxiv.org/abs/2503.18813
+- Research repo: https://github.com/google-research/camel-prompt-injection
+
+This repository does **not** aim to reproduce the Google research stack exactly, and it does **not** present itself as a benchmark-equivalent implementation of that repo.
+
+This repository was implemented directly within Hermes and does not vendor Google source code unless explicitly noted in future changes.
+
+Instead, it adapts the core boundary-setting ideas from the paper to Hermes' existing runtime model:
+
+- Google's repo is a research artifact aimed at reproducing the paper's results and evaluation setup
+- this fork is a Hermes-native runtime integration aimed at hardening a production-style agent loop
+- Google's work includes its own pipeline, interpreter, evaluation assumptions, and benchmark framing
+- this fork focuses on Hermes-specific trust separation, tool gating, provenance handling, and operator-intent enforcement
+
+In other words, the design is research-inspired, but the implementation and problem framing are specific to Hermes.
+
 ## What This Fork Changes
 
 This fork adds a runtime security layer centered on `agent/camel_guard.py` and the Hermes tool loop.
@@ -143,9 +163,9 @@ pytest -q tests/agent/test_camel_guard.py tests/test_run_agent.py
 
 ## Scope
 
-This fork is inspired by the CaMeL paper and adapted to Hermes' runtime, tool semantics, and conversation loop.
+This fork follows the trust-boundary principles described in the CaMeL paper, but applies them to Hermes' agent runtime rather than to the paper's original evaluation stack.
 
-It is not presented as a full reproduction of the paper's AgentDojo benchmark matrix. The benchmark here is Hermes-specific and focused on runtime trust boundaries plus paper-aligned indirect injection scenarios.
+It is not presented as a full reproduction of the paper's AgentDojo benchmark matrix or as a claim of matching the paper's performance characteristics. The validation here is Hermes-specific and focused on runtime trust boundaries plus paper-aligned indirect injection scenarios.
 
 ## Upstream Relation
 
@@ -155,5 +175,6 @@ This repository tracks Hermes Agent from Nous Research and carries the CaMeL int
 - CaMeL paper: https://arxiv.org/abs/2503.18813
 - CaMeL repo: https://github.com/google-research/camel-prompt-injection
 - Upstream PR: https://github.com/NousResearch/hermes-agent/pull/1992
+- Third-party notices: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 
 For the original general-purpose Hermes README, see [`docs/upstream-readme.md`](docs/upstream-readme.md).
