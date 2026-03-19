@@ -67,6 +67,7 @@ os.environ.setdefault("MSWEA_SILENT_STARTUP", "1")
 import logging
 import time as _time
 from datetime import datetime
+from agent.camel_guard import CAMEL_GUARD_RUNTIME_CHOICES
 
 from hermes_cli import __version__, __release_date__
 from hermes_constants import OPENROUTER_BASE_URL
@@ -525,6 +526,7 @@ def cmd_chat(args):
         "provider": getattr(args, "provider", None),
         "toolsets": args.toolsets,
         "skills": getattr(args, "skills", None),
+        "camel_guard": getattr(args, "camel_guard", None),
         "verbose": args.verbose,
         "quiet": getattr(args, "quiet", False),
         "query": args.query,
@@ -3019,6 +3021,12 @@ For more help on a command:
         default=False,
         help="Include the session ID in the agent's system prompt"
     )
+    parser.add_argument(
+        "--camel-guard",
+        choices=CAMEL_GUARD_RUNTIME_CHOICES,
+        default=None,
+        help="CaMeL runtime mode for this session: on, off, or monitor"
+    )
     
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
     
@@ -3101,6 +3109,12 @@ For more help on a command:
         action="store_true",
         default=False,
         help="Include the session ID in the agent's system prompt"
+    )
+    chat_parser.add_argument(
+        "--camel-guard",
+        choices=CAMEL_GUARD_RUNTIME_CHOICES,
+        default=None,
+        help="CaMeL runtime mode for this session: on, off, or monitor"
     )
     chat_parser.set_defaults(func=cmd_chat)
 

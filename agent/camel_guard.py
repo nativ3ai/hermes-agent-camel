@@ -17,6 +17,15 @@ from typing import Any, Dict, Iterable, List, Sequence
 
 
 CAMEL_UNTRUSTED_PREFIX = "[CaMeL: UNTRUSTED TOOL DATA]"
+CAMEL_GUARD_RUNTIME_CHOICES = ("on", "off", "monitor", "enforce", "legacy")
+
+_CAMEL_GUARD_MODE_ALIASES = {
+    "on": "enforce",
+    "off": "off",
+    "monitor": "monitor",
+    "enforce": "enforce",
+    "legacy": "off",
+}
 
 _TRUSTED_CONTROL_TOOLS = {
     "clarify",
@@ -207,6 +216,16 @@ def _tool_capability(tool_name: str, tool_args: Dict[str, Any] | None = None) ->
     return _SENSITIVE_TOOL_CAPABILITIES.get(tool_name, "")
 
 
+def normalize_camel_guard_mode(value: Any, *, default: str = "enforce") -> str:
+    raw = "" if value is None else str(value).strip().lower()
+    if not raw:
+        raw = default
+    normalized = _CAMEL_GUARD_MODE_ALIASES.get(raw, raw)
+    if normalized not in {"off", "monitor", "enforce"}:
+        normalized = default
+    return normalized
+
+
 def is_untrusted_tool(tool_name: str) -> bool:
     # In the full CaMeL model, nearly all tool outputs are data, not control.
     return tool_name not in _TRUSTED_CONTROL_TOOLS
@@ -278,9 +297,7 @@ class CamelGuardConfig:
     @classmethod
     def from_dict(cls, raw: Dict[str, Any] | None) -> "CamelGuardConfig":
         raw = raw or {}
-        mode = str(raw.get("mode", "enforce")).strip().lower() or "enforce"
-        if mode not in {"off", "monitor", "enforce"}:
-            mode = "enforce"
+        mode = normalize_camel_guard_mode(raw.get("mode"), default="enforce")
         return cls(
             enabled=bool(raw.get("enabled", True)),
             mode=mode,

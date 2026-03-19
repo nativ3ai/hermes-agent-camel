@@ -19,6 +19,7 @@ from rich.table import Table
 
 from prompt_toolkit import print_formatted_text as _pt_print
 from prompt_toolkit.formatted_text import ANSI as _PT_ANSI
+from agent.camel_guard import normalize_camel_guard_mode
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,15 @@ COMPACT_BANNER = """
 [bold #FFD700]║[/]  [#FFBF00]🐪 CaMeL Guard[/] [dim #B8860B]- runtime trust boundary active[/]  [bold #FFD700]║[/]
 [bold #FFD700]╚══════════════════════════════════════════════════════════════╝[/]
 """
+
+
+def _camel_runtime_badge(mode: str) -> tuple[str, str]:
+    normalized = normalize_camel_guard_mode(mode, default="enforce")
+    if normalized == "off":
+        return "Legacy Runtime", "CaMeL guard disabled"
+    if normalized == "monitor":
+        return "CaMeL Monitor", "observe-only trust boundary"
+    return "CaMeL Guard", "runtime trust boundary active"
 
 
 # =========================================================================
@@ -245,7 +255,8 @@ def build_welcome_banner(console: Console, model: str, cwd: str,
                          enabled_toolsets: List[str] = None,
                          session_id: str = None,
                          get_toolset_for_tool=None,
-                         context_length: int = None):
+                         context_length: int = None,
+                         camel_guard_mode: str = "enforce"):
     """Build and print a welcome banner with caduceus on left and info on right.
 
     Args:
@@ -257,6 +268,7 @@ def build_welcome_banner(console: Console, model: str, cwd: str,
         session_id: Session identifier.
         get_toolset_for_tool: Callable to map tool name -> toolset name.
         context_length: Model's context window size in tokens.
+        camel_guard_mode: Runtime mode for CaMeL enforcement display.
     """
     from model_tools import check_tool_availability, TOOLSET_REQUIREMENTS
     if get_toolset_for_tool is None:
@@ -293,9 +305,10 @@ def build_welcome_banner(console: Console, model: str, cwd: str,
     if len(model_short) > 28:
         model_short = model_short[:25] + "..."
     ctx_str = f" [dim {dim}]·[/] [dim {dim}]{_format_context_length(context_length)} context[/]" if context_length else ""
+    runtime_label, runtime_detail = _camel_runtime_badge(camel_guard_mode)
     left_lines.append(f"[{accent}]{model_short}[/]{ctx_str} [dim {dim}]·[/] [dim {dim}]Nous Research[/]")
     left_lines.append(f"[dim {dim}]{cwd}[/]")
-    left_lines.append(f"[bold {accent}]🐪 CaMeL Guard[/] [dim {dim}]runtime trust boundary active[/]")
+    left_lines.append(f"[bold {accent}]{runtime_label}[/] [dim {dim}]{runtime_detail}[/]")
     if session_id:
         left_lines.append(f"[dim {session_color}]Session: {session_id}[/]")
     left_content = "\n".join(left_lines)

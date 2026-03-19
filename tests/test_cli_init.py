@@ -94,6 +94,10 @@ class TestVerboseAndToolProgress:
         assert isinstance(cli.tool_progress_mode, str)
         assert cli.tool_progress_mode in ("off", "new", "all", "verbose")
 
+    def test_camel_guard_override_sets_legacy_runtime_mode(self):
+        cli = _make_cli(camel_guard="off")
+        assert cli.camel_guard_mode == "off"
+
 
 class TestSingleQueryState:
     def test_voice_and_interrupt_state_initialized_before_run(self):

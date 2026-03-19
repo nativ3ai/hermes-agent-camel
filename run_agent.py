@@ -77,7 +77,13 @@ from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
     MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
 )
-from agent.camel_guard import CamelDecision, CamelGuard, CamelGuardConfig, sanitize_message_for_api
+from agent.camel_guard import (
+    CamelDecision,
+    CamelGuard,
+    CamelGuardConfig,
+    normalize_camel_guard_mode,
+    sanitize_message_for_api,
+)
 from agent.model_metadata import (
     fetch_model_metadata, get_model_context_length,
     estimate_tokens_rough, estimate_messages_tokens_rough,
@@ -416,6 +422,7 @@ class AIAgent:
         checkpoints_enabled: bool = False,
         checkpoint_max_snapshots: int = 50,
         pass_session_id: bool = False,
+        camel_guard_mode: str | None = None,
     ):
         """
         Initialize the AI Agent.
@@ -778,9 +785,19 @@ class AIAgent:
             _camel_cfg = load_config().get("camel_guard", {})
         except Exception:
             _camel_cfg = {}
+        if camel_guard_mode is not None:
+            resolved_mode = normalize_camel_guard_mode(camel_guard_mode, default="enforce")
+            _camel_cfg = dict(_camel_cfg or {})
+            _camel_cfg["mode"] = resolved_mode
+            _camel_cfg["enabled"] = resolved_mode != "off"
         self._camel_guard = CamelGuard(CamelGuardConfig.from_dict(_camel_cfg))
-        if self._camel_guard.config.enabled and not self.quiet_mode:
-            print(f"🛡️  CaMeL guard: {self._camel_guard.config.mode}")
+        if not self.quiet_mode:
+            active_mode = (
+                self._camel_guard.config.mode
+                if self._camel_guard.config.enabled and self._camel_guard.config.mode != "off"
+                else "off"
+            )
+            print(f"🛡️  CaMeL guard: {active_mode}")
 
         # Check tool requirements
         if self.tools and not self.quiet_mode:

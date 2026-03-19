@@ -138,6 +138,29 @@ hermes
 
 Use the `camelup` installer repo to apply this fork or switch an existing checkout to the CaMeL build.
 
+## Runtime Modes
+
+This fork now supports two explicit runtime behaviors from the same checkout:
+
+- guarded runtime: CaMeL trust boundaries enforced
+- legacy runtime: CaMeL disabled for compatibility or comparison
+
+Examples:
+
+```bash
+hermes --camel-guard on
+hermes --camel-guard off
+hermes chat --camel-guard monitor -q "Summarize the report"
+```
+
+Mode behavior:
+
+- `on` or `enforce`: full CaMeL enforcement
+- `monitor`: record and surface trust-boundary decisions without enforcing blocks
+- `off` or `legacy`: disable CaMeL and run the legacy runtime behavior
+
+This keeps one codebase and one install path while making it easy to compare guarded and legacy behavior side by side.
+
 ## Developer setup
 
 ```bash
