@@ -159,6 +159,28 @@ def test_aiagent_reuses_existing_errors_log_handler():
             root_logger.addHandler(handler)
 
 
+def test_aiagent_accepts_camel_guard_runtime_override():
+    with (
+        patch(
+            "run_agent.get_tool_definitions",
+            return_value=_make_tool_defs("web_search", "terminal"),
+        ),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI"),
+    ):
+        agent = AIAgent(
+            api_key="test-k...7890",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+            camel_guard_mode="off",
+        )
+
+    assert agent._camel_guard.config.enabled is False
+    assert agent._camel_guard.config.mode == "off"
+    assert agent._camel_guard.system_prompt_guidance() == ""
+
+
 # ---------------------------------------------------------------------------
 # Helper to build mock assistant messages (API response objects)
 # ---------------------------------------------------------------------------

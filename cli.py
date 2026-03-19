@@ -64,6 +64,7 @@ from agent.usage_pricing import (
     format_duration_compact,
     format_token_count_compact,
 )
+from agent.camel_guard import normalize_camel_guard_mode
 from hermes_cli.banner import _format_context_length
 
 _COMMAND_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
@@ -857,7 +858,25 @@ COMPACT_BANNER = """
 """
 
 
-def _build_compact_banner() -> str:
+def _camel_runtime_badge(mode: str) -> tuple[str, str]:
+    normalized = normalize_camel_guard_mode(mode, default="enforce")
+    if normalized == "off":
+        return "Legacy Runtime", "CaMeL guard disabled"
+    if normalized == "monitor":
+        return "CaMeL Monitor", "observe-only trust boundary"
+    return "CaMeL Guard", "runtime trust boundary active"
+
+
+def _camel_runtime_welcome(agent_name: str, mode: str) -> str:
+    normalized = normalize_camel_guard_mode(mode, default="enforce")
+    if normalized == "off":
+        return f"Welcome to {agent_name}! Legacy runtime active. Type your message or /help for commands."
+    if normalized == "monitor":
+        return f"Welcome to {agent_name}! CaMeL Monitor active. Type your message or /help for commands."
+    return f"Welcome to {agent_name}! CaMeL Guard active. Type your message or /help for commands."
+
+
+def _build_compact_banner(camel_guard_mode: str = "enforce") -> str:
     """Build a compact banner that fits the current terminal width."""
     w = min(shutil.get_terminal_size().columns - 2, 64)
     if w < 30:
@@ -866,13 +885,17 @@ def _build_compact_banner() -> str:
     bar = "═" * w
     line1 = "⚕ NOUS HERMES - AI Agent Framework"
     line2 = "Messenger of the Digital Gods  ·  Nous Research"
+    runtime_label, runtime_detail = _camel_runtime_badge(camel_guard_mode)
+    line3 = f"{runtime_label} - {runtime_detail}"
     # Truncate and pad to fit
     line1 = line1[:inner - 2].ljust(inner - 2)
     line2 = line2[:inner - 2].ljust(inner - 2)
+    line3 = line3[:inner - 2].ljust(inner - 2)
     return (
         f"\n[bold #FFD700]╔{bar}╗[/]\n"
         f"[bold #FFD700]║[/] [#FFBF00]{line1}[/] [bold #FFD700]║[/]\n"
         f"[bold #FFD700]║[/] [dim #B8860B]{line2}[/] [bold #FFD700]║[/]\n"
+        f"[bold #FFD700]║[/] [#CD7F32]{line3}[/] [bold #FFD700]║[/]\n"
         f"[bold #FFD700]╚{bar}╝[/]\n"
     )
 
@@ -998,6 +1021,7 @@ class HermesCLI:
         resume: str = None,
         checkpoints: bool = False,
         pass_session_id: bool = False,
+        camel_guard: str = None,
     ):
         """
         Initialize the Hermes CLI.
@@ -1013,6 +1037,7 @@ class HermesCLI:
             compact: Use compact display mode
             resume: Session ID to resume (restores conversation history from SQLite)
             pass_session_id: Include the session ID in the agent's system prompt
+            camel_guard: Runtime mode override ("on", "off", or "monitor")
         """
         # Initialize Rich console
         self.console = Console()
@@ -1028,6 +1053,14 @@ class HermesCLI:
         self.show_reasoning = CLI_CONFIG["display"].get("show_reasoning", False)
 
         self.verbose = verbose if verbose is not None else (self.tool_progress_mode == "verbose")
+        camel_cfg = self.config.get("camel_guard", {}) if isinstance(self.config, dict) else {}
+        config_mode = normalize_camel_guard_mode(
+            camel_cfg.get("mode", "enforce"),
+            default="enforce",
+        )
+        if not camel_cfg.get("enabled", True):
+            config_mode = "off"
+        self.camel_guard_mode = normalize_camel_guard_mode(camel_guard, default=config_mode)
         
         # streaming: stream tokens to the terminal as they arrive (display.streaming in config.yaml)
         self.streaming_enabled = CLI_CONFIG["display"].get("streaming", False)
@@ -1850,6 +1883,7 @@ class HermesCLI:
                 checkpoints_enabled=self.checkpoints_enabled,
                 checkpoint_max_snapshots=self.checkpoint_max_snapshots,
                 pass_session_id=self.pass_session_id,
+                camel_guard_mode=self.camel_guard_mode,
                 tool_progress_callback=self._on_tool_progress,
                 stream_delta_callback=self._stream_delta if self.streaming_enabled else None,
             )
@@ -1860,6 +1894,7 @@ class HermesCLI:
                 runtime.get("api_mode"),
                 runtime.get("command"),
                 tuple(runtime.get("args") or ()),
+                self.camel_guard_mode,
             )
 
             if self._pending_title and self._session_db:
@@ -1892,7 +1927,7 @@ class HermesCLI:
         use_compact = self.compact or term_width < 80
         
         if use_compact:
-            self.console.print(_build_compact_banner())
+            self.console.print(_build_compact_banner(self.camel_guard_mode))
             self._show_status()
         else:
             # Get tools for display
@@ -1915,6 +1950,7 @@ class HermesCLI:
                 enabled_toolsets=self.enabled_toolsets,
                 session_id=self.session_id,
                 context_length=ctx_len,
+                camel_guard_mode=self.camel_guard_mode,
             )
         
         # Show tool availability warnings if any tools are disabled
@@ -5702,11 +5738,12 @@ class HermesCLI:
         try:
             from hermes_cli.skin_engine import get_active_skin
             _welcome_skin = get_active_skin()
-            _welcome_text = _welcome_skin.get_branding("welcome", "Welcome to Hermes Agent! Type your message or /help for commands.")
+            _agent_name = _welcome_skin.get_branding("agent_name", "Hermes Agent")
             _welcome_color = _welcome_skin.get_color("banner_text", "#FFF8DC")
         except Exception:
-            _welcome_text = "Welcome to Hermes Agent! Type your message or /help for commands."
+            _agent_name = "Hermes Agent"
             _welcome_color = "#FFF8DC"
+        _welcome_text = _camel_runtime_welcome(_agent_name, self.camel_guard_mode)
         self.console.print(f"[{_welcome_color}]{_welcome_text}[/]")
         self.console.print()
         
@@ -6910,6 +6947,7 @@ def main(
     w: bool = False,
     checkpoints: bool = False,
     pass_session_id: bool = False,
+    camel_guard: str = None,
 ):
     """
     Hermes Agent CLI - Interactive AI Assistant
@@ -6931,6 +6969,7 @@ def main(
         resume: Resume a previous session by its ID (e.g., 20260225_143052_a1b2c3)
         worktree: Run in an isolated git worktree (for parallel agents). Alias: -w
         w: Shorthand for --worktree
+        camel_guard: Runtime mode override ("on", "off", or "monitor")
     
     Examples:
         python cli.py                            # Start interactive mode
@@ -7020,6 +7059,7 @@ def main(
         resume=resume,
         checkpoints=checkpoints,
         pass_session_id=pass_session_id,
+        camel_guard=camel_guard,
     )
 
     if parsed_skills:

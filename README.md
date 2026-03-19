@@ -135,6 +135,31 @@ See `hermes claw migrate --help` for all options, or use the `openclaw-migration
 
 ---
 
+## Runtime Modes
+
+This fork now supports two explicit runtime behaviors from the same checkout:
+
+- guarded runtime: CaMeL trust boundaries enforced
+- legacy runtime: CaMeL disabled for compatibility or comparison
+
+Examples:
+
+```bash
+hermes --camel-guard on
+hermes --camel-guard off
+hermes chat --camel-guard monitor -q "Summarize the report"
+```
+
+Mode behavior:
+
+- `on` or `enforce`: full CaMeL enforcement
+- `monitor`: record and surface trust-boundary decisions without enforcing blocks
+- `off` or `legacy`: disable CaMeL and run the legacy runtime behavior
+
+This keeps one codebase and one install path while making it easy to compare guarded and legacy behavior side by side.
+
+---
+
 ## Contributing
 
 We welcome contributions! See the [Contributing Guide](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) for development setup, code style, and PR process.
