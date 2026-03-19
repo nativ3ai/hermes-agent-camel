@@ -25,6 +25,16 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), [Open
 <tr><td><b>Research-ready</b></td><td>Batch trajectory generation, Atropos RL environments, trajectory compression for training the next generation of tool-calling models.</td></tr>
 </table>
 
+
+## Research Provenance
+
+This fork follows CaMeL trust-boundary principles for prompt-injection defense, adapted to Hermes runtime semantics. It is not presented as a full reproduction of Google Research's evaluation stack.
+
+- CaMeL paper: https://arxiv.org/abs/2503.18813
+- CaMeL repo: https://github.com/google-research/camel-prompt-injection
+- Upstream Hermes: https://github.com/NousResearch/hermes-agent
+- Upstream CaMeL PR context: https://github.com/NousResearch/hermes-agent/pull/1992
+
 ---
 
 ## Quick Install
