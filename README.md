@@ -201,3 +201,18 @@ This repository tracks Hermes Agent from Nous Research and carries the CaMeL int
 - Third-party notices: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 
 For the original general-purpose Hermes README, see [`docs/upstream-readme.md`](docs/upstream-readme.md).
+
+## Related Add-On
+
+For payment flows that keep the same operator-intent boundary outside the model loop, see:
+
+- Hermes PayGuard: https://github.com/nativ3ai/hermes-payguard
+
+Hermes PayGuard is a separate optional plugin, not a core runtime patch. It adds:
+
+- safe-by-design USDC transfer intents
+- Circle user-controlled and developer-controlled flows
+- Circle CCTP route quoting and attestation tracking
+- x402 paid fetch flows
+
+That separation is intentional: the payment approval ledger and execution rails belong outside the core CaMeL runtime layer.
