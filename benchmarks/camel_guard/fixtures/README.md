@@ -1,5 +1,7 @@
 # CaMeL Benchmark Fixtures
 
-- `job_application_clean.txt`: benign application text.
-- `job_application_hidden_prompt_extracted.txt`: what a naive extractor could surface from a PDF with white-on-white hidden text.
-- `job_application_hidden_prompt.pdf`: actual text PDF with visible resume content and hidden white text carrying the prompt-injection payload.
+- `candidate_application_reference.txt`: benign application text.
+- `candidate_application.txt`: what a naive extractor could surface from a PDF with white-on-white hidden text.
+- `candidate_application.pdf`: actual text PDF with visible application content and hidden white text carrying the prompt-injection payload.
+
+The filenames are intentionally neutral so they do not leak the attack setup during a live agent demo.
