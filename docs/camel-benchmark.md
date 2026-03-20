@@ -9,6 +9,8 @@ The goal is not to claim a full reproduction of the paper's AgentDojo benchmark.
 - compatibility evidence against Hermes' existing runtime behavior
 - a paper-aligned micro-benchmark for the `important_instructions` indirect prompt-injection pattern used by the CaMeL paper/repo
 
+For a direct `--camel-guard off` vs `--camel-guard on` comparison using a hidden-text job-application PDF fixture, see [camel-runtime-comparison.md](/Users/native/Downloads/hermes-agent-camel/docs/camel-runtime-comparison.md).
+
 Reference implementation studied:
 
 - Paper: `Defeating Prompt Injections by Design` (`arXiv:2503.18813`)
