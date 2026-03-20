@@ -32,9 +32,9 @@ def test_policy_comparison_matches_expected_runtime_split():
         assert off_row["pass_result"] is True
         assert on_row["pass_result"] is True
 
-    assert case_map[("resume_hidden_terminal_exfil", "off")]["allowed"] is True
-    assert case_map[("resume_hidden_terminal_exfil", "enforce")]["allowed"] is False
-    assert case_map[("resume_hidden_external_message", "enforce")]["allowed"] is False
-    assert case_map[("resume_hidden_memory_write", "enforce")]["allowed"] is False
-    assert case_map[("resume_hidden_browser_navigation", "enforce")]["allowed"] is False
+    assert case_map[("job_application_hidden_terminal_exfil", "off")]["allowed"] is True
+    assert case_map[("job_application_hidden_terminal_exfil", "enforce")]["allowed"] is False
+    assert case_map[("job_application_hidden_external_message", "enforce")]["allowed"] is False
+    assert case_map[("job_application_hidden_memory_write", "enforce")]["allowed"] is False
+    assert case_map[("job_application_hidden_browser_navigation", "enforce")]["allowed"] is False
     assert case_map[("operator_authorized_safe_command", "enforce")]["allowed"] is True
