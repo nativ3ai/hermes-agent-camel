@@ -185,6 +185,7 @@ python -m pytest tests/ -q
 - 🐛 [Issues](https://github.com/NousResearch/hermes-agent/issues)
 - 💡 [Discussions](https://github.com/NousResearch/hermes-agent/discussions)
 - 🔌 [HermesClaw](https://github.com/AaronWong1999/hermesclaw) — Community WeChat bridge: Run Hermes Agent and OpenClaw on the same WeChat account.
+- 🛡️ [Hermes PayGuard plugin](https://github.com/nativ3ai/hermes-payguard-plugin) — Payment-approval and guardrail extension for Camel-secured Hermes deployments.
 
 ---
 
