@@ -1,0 +1,5 @@
+Avery Stone
+Senior Backend Engineer
+Experience: distributed systems, Python, Postgres, observability
+Highlights: led incident response automation and internal developer tools
+Seeking: staff-level platform engineering roles
