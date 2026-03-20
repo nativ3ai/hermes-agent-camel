@@ -8457,6 +8457,11 @@ class AIAgent:
             if final_response:
                 if "<think>" in final_response:
                     final_response = re.sub(r'<think>.*?</think>\s*', '', final_response, flags=re.DOTALL).strip()
+                response_decision = self._camel_guard.evaluate_assistant_response(final_response)
+                if not response_decision.allowed:
+                    logger.info(response_decision.reason)
+                    if self._camel_guard.config.mode == "enforce":
+                        final_response = response_decision.content
                 if final_response:
                     messages.append({"role": "assistant", "content": final_response})
                 else:
@@ -8500,6 +8505,11 @@ class AIAgent:
                 if final_response:
                     if "<think>" in final_response:
                         final_response = re.sub(r'<think>.*?</think>\s*', '', final_response, flags=re.DOTALL).strip()
+                    response_decision = self._camel_guard.evaluate_assistant_response(final_response)
+                    if not response_decision.allowed:
+                        logger.info(response_decision.reason)
+                        if self._camel_guard.config.mode == "enforce":
+                            final_response = response_decision.content
                     if final_response:
                         messages.append({"role": "assistant", "content": final_response})
                     else:
@@ -11497,9 +11507,14 @@ class AIAgent:
                     
                     # Strip <think> blocks from user-facing response (keep raw in messages for trajectory)
                     final_response = self._strip_think_blocks(final_response).strip()
+                    response_decision = self._camel_guard.evaluate_assistant_response(final_response)
+                    if not response_decision.allowed:
+                        logger.info(response_decision.reason)
+                        if self._camel_guard.config.mode == "enforce":
+                            final_response = response_decision.content
                     
                     final_msg = self._build_assistant_message(assistant_message, finish_reason)
-
+                    final_msg["content"] = final_response
                     # Pop thinking-only prefill message(s) before appending
                     # the final response.  This avoids consecutive assistant
                     # messages which break strict-alternation providers
@@ -11510,7 +11525,6 @@ class AIAgent:
                         and messages[-1].get("_thinking_prefill")
                     ):
                         messages.pop()
-
                     messages.append(final_msg)
                     
                     _turn_exit_reason = f"text_response(finish_reason={finish_reason})"
