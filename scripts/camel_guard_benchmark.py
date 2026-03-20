@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
 
@@ -11,7 +12,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agent.camel_benchmark import DOC_PATH, render_json, render_markdown, run_policy_comparison, write_default_fixtures
+from agent.camel_benchmark import (
+    DOC_PATH,
+    render_markdown,
+    results_as_dicts,
+    run_policy_comparison,
+    run_response_comparison,
+    write_default_fixtures,
+)
 
 
 def main() -> int:
@@ -21,15 +29,24 @@ def main() -> int:
     args = parser.parse_args()
 
     write_default_fixtures()
-    outcomes = run_policy_comparison()
+    response_outcomes = run_response_comparison()
+    tool_outcomes = run_policy_comparison()
 
     if args.write_doc:
-        DOC_PATH.write_text(render_markdown(outcomes), encoding="utf-8")
+        DOC_PATH.write_text(render_markdown(response_outcomes, tool_outcomes), encoding="utf-8")
 
     if args.json:
-        print(render_json(outcomes))
+        print(
+            json.dumps(
+                {
+                    "response_hijack": results_as_dicts(response_outcomes),
+                    "sensitive_tools": results_as_dicts(tool_outcomes),
+                },
+                indent=2,
+            )
+        )
     else:
-        print(render_markdown(outcomes))
+        print(render_markdown(response_outcomes, tool_outcomes))
     return 0
 
 
