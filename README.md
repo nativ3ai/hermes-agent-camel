@@ -74,6 +74,30 @@ hermes doctor       # Diagnose any issues
 
 📖 **[Full documentation →](https://hermes-agent.nousresearch.com/docs/)**
 
+## Optional CaMeL Guard
+
+Hermes keeps the legacy runtime by default. Running plain `hermes` or `hermes chat` does **not** enable CaMeL automatically.
+
+Use CaMeL only when you explicitly opt in for the session:
+
+```bash
+hermes --camel-guard monitor
+hermes --camel-guard enforce
+hermes chat --camel-guard monitor -q "Summarize this report"
+```
+
+Modes:
+
+- `off` / legacy: default behavior, no CaMeL runtime enforcement
+- `monitor`: records policy decisions and traces but does not block tools
+- `enforce`: blocks unauthorized sensitive actions under untrusted context
+
+CaMeL benchmark and trace docs:
+
+- [`docs/camel-benchmark.md`](docs/camel-benchmark.md)
+- [`docs/camel-runtime-comparison.md`](docs/camel-runtime-comparison.md)
+- [`docs/camel-live-runtime-comparison.md`](docs/camel-live-runtime-comparison.md)
+
 ## CLI vs Messaging Quick Reference
 
 Hermes has two entry points: start the terminal UI with `hermes`, or run the gateway and talk to it from Telegram, Discord, Slack, WhatsApp, Signal, or Email. Once you're in a conversation, many slash commands are shared across both interfaces.

@@ -1,0 +1,85 @@
+import sys
+from types import SimpleNamespace
+
+
+def test_camel_trace_subcommand_renders_json(monkeypatch, capsys):
+    import hermes_cli.main as main_mod
+
+    monkeypatch.setattr(
+        main_mod,
+        "_load_camel_trace",
+        lambda session_id=None: {
+            "session_id": session_id or "session-1",
+            "runtime_mode": "enforce",
+            "summary": {"turn_count": 1, "policy_alert_count": 1, "response_alert_count": 0},
+            "turns": [],
+        },
+    )
+    monkeypatch.setattr(sys, "argv", ["hermes", "camel", "trace", "--format", "json", "--session", "abc123"])
+
+    main_mod.main()
+
+    output = capsys.readouterr().out
+    assert '"session_id": "abc123"' in output
+    assert '"runtime_mode": "enforce"' in output
+
+
+def test_camel_benchmark_subcommand_renders_markdown(monkeypatch, capsys):
+    import agent.camel_benchmark as bench_mod
+    import hermes_cli.main as main_mod
+
+    monkeypatch.setattr(bench_mod, "write_default_fixtures", lambda: {})
+    monkeypatch.setattr(bench_mod, "run_response_comparison", lambda: [])
+    monkeypatch.setattr(bench_mod, "run_policy_comparison", lambda: [])
+    monkeypatch.setattr(bench_mod, "render_markdown", lambda response_rows, tool_rows: "# benchmark\n")
+    monkeypatch.setattr(sys, "argv", ["hermes", "camel", "benchmark"])
+
+    main_mod.main()
+
+    assert capsys.readouterr().out == "# benchmark\n"
+
+
+def test_chat_parser_accepts_camel_guard_monitor(monkeypatch):
+    import hermes_cli.main as main_mod
+
+    captured = {}
+
+    monkeypatch.setattr(
+        main_mod,
+        "cmd_chat",
+        lambda args: captured.setdefault("camel_guard", getattr(args, "camel_guard", None)),
+    )
+    monkeypatch.setattr(sys, "argv", ["hermes", "chat", "--camel-guard", "monitor", "-q", "hi"])
+
+    main_mod.main()
+
+    assert captured["camel_guard"] == "monitor"
+
+
+def test_cmd_chat_does_not_forward_camel_guard_by_default(monkeypatch):
+    import hermes_cli.main as main_mod
+
+    args = SimpleNamespace(
+        yolo=False,
+        source=None,
+        model=None,
+        provider=None,
+        toolsets=None,
+        skills=None,
+        camel_guard=None,
+        verbose=False,
+        quiet=False,
+        query="hi",
+        resume=None,
+        worktree=False,
+        checkpoints=False,
+        pass_session_id=False,
+    )
+    captured = {}
+
+    fake_cli_module = SimpleNamespace(main=lambda **kwargs: captured.update(kwargs))
+    monkeypatch.setitem(sys.modules, "cli", fake_cli_module)
+
+    main_mod.cmd_chat(args)
+
+    assert "camel_guard" not in captured
