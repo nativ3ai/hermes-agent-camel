@@ -579,6 +579,23 @@ Hermes has terminal access. Security matters.
 
 If your PR affects security, note it explicitly in the description.
 
+### Security/runtime PR expectations
+
+If your change touches the core runtime boundary (`run_agent.py`, `cli.py`, `hermes_cli/main.py`, `hermes_cli/config.py`) or changes the agent's security posture:
+
+- **Preserve legacy behavior by default** unless there is a strong reason not to. Opt-in security and runtime modes are easier to review and safer to roll out.
+- **Document the design literately**. A reviewer should be able to understand:
+  - the problem being solved
+  - the trust/runtime model
+  - the exact files that implement it
+  - the operator-facing behavior change
+- **Include benchmark evidence** when you change runtime security or performance behavior. Prefer:
+  - targeted regression tests
+  - a reproducible benchmark harness
+  - token/latency/cost overhead where relevant
+- **Break down large diffs** in the PR body. If a PR is large because it includes docs, tests, fixtures, or benchmark artifacts, say so explicitly so reviewers can separate the hot-path runtime changes from the review package.
+- **Keep generated evidence minimal**. If you check in benchmark output or fixtures, explain why those artifacts belong in-repo and keep them scoped to what reviewers need.
+
 ---
 
 ## Pull Request Process
@@ -607,6 +624,12 @@ Include:
 - **How to test** it (reproduction steps for bugs, usage examples for features)
 - **What platforms** you tested on
 - Reference any related issues
+
+For **security/runtime PRs**, also include:
+- the previous PR / issue / design reference if this is a rewrite or follow-up
+- a brief **diff composition** summary (runtime code vs docs/tests/fixtures)
+- the **default operator behavior** and any explicit opt-in/opt-out flags
+- a pointer to any architecture / benchmark / trace docs added in the PR
 
 ### Commit messages
 

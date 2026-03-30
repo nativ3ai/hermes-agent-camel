@@ -411,6 +411,35 @@ Hermes-Agent ensures caching remains valid throughout a conversation. **Do NOT i
 
 Cache-breaking forces dramatically higher costs. The ONLY time we alter context is during context compression.
 
+### Security/runtime changes need a literate review package
+
+If you change the runtime trust boundary or core execution path, especially in:
+
+- `run_agent.py`
+- `cli.py`
+- `hermes_cli/main.py`
+- `hermes_cli/config.py`
+
+then do not treat the task as "just make the code pass tests".
+
+You should also produce a reviewer-readable package:
+
+1. **Preserve legacy behavior by default** unless the task explicitly requires a breaking rollout.
+2. **Document the design** in a way a maintainer can read before reading the code:
+   - problem
+   - trust/runtime model
+   - operator-visible behavior
+   - benchmark or validation plan
+3. **Explain the diff shape** in the PR body when the LOC count is large:
+   - runtime code
+   - docs
+   - tests
+   - fixtures / benchmark artifacts
+4. **Prefer benchmark scripts over vague claims** when adding security/runtime overhead.
+5. **Keep generated artifacts scoped**. If benchmark outputs are checked in, they must directly support review.
+
+For AI coding agents specifically: when preparing or updating a PR for this class of change, include the default/off behavior, opt-in flags, architecture docs, benchmark docs, and a diff-composition summary in the PR body.
+
 ### Working Directory Behavior
 - **CLI**: Uses current directory (`.` → `os.getcwd()`)
 - **Messaging**: Uses `MESSAGING_CWD` env var (default: home directory)
