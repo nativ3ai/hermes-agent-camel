@@ -25,7 +25,7 @@ Instead, it adapts the core boundary-setting ideas from the paper to Hermes' exi
 - Google's repo is a research artifact aimed at reproducing the paper's results and evaluation setup
 - this fork is a Hermes-native runtime integration aimed at hardening a production-style agent loop
 - Google's work includes its own pipeline, interpreter, evaluation assumptions, and benchmark framing
-- this fork focuses on Hermes-specific trust separation, tool gating, provenance handling, and operator-intent enforcement
+- this fork focuses on Hermes-specific trust separation, tool gating, traceability, and operator-intent enforcement
 
 In other words, the design is research-inspired, but the implementation and problem framing are specific to Hermes.
 
@@ -35,10 +35,11 @@ This fork adds a runtime security layer centered on `agent/camel_guard.py` and t
 
 Main additions:
 
-- trusted operator plan extraction from real user turns
-- provenance-aware wrapping for untrusted tool outputs
-- per-turn security envelope injected into the effective system context
+- trusted operator plan extraction from real user turns via a single isolated auxiliary-model classification pass only when a guarded sensitive decision under untrusted context needs it
+- runtime detection of untrusted tool-context from the conversation history
 - capability gating for sensitive tools
+- opt-in runtime modes: `monitor`, `enforce`, and `off`
+- per-turn CaMeL Trace artifacts for policy and decision review
 - gating for automatic memory flush and synthetic continuation turns
 - stripping of internal CaMeL metadata before provider API calls
 
@@ -72,19 +73,24 @@ The target attack pattern is:
 
 Hermes derives trusted control from real user turns only. Synthetic system-control turns do not pollute the trusted plan.
 
+The authorization plan is produced by an isolated auxiliary-model call with:
+
+- trusted user text only
+- no tools
+- no memory
+- no untrusted tool outputs in context
+- lazy invocation only when a sensitive decision under untrusted context requires authorization
+- cached by recent trusted context
+
 ### 2. Untrusted data channel
 
-Tool outputs are treated as untrusted data by default and wrapped with provenance metadata before they re-enter model context.
+Tool outputs are treated as untrusted data by the runtime policy layer. The guard infers untrusted context from tool history and tool-call lineage instead of rewriting tool results before they go back to the model.
 
-### 3. Security envelope
-
-Every turn includes a compact CaMeL security envelope describing the trusted goal, authorized capabilities, and current untrusted source inventory.
-
-### 4. Capability gating
+### 3. Capability gating
 
 Side-effecting tools are checked against the trusted operator plan before execution.
 
-### 5. Provider hygiene
+### 4. Provider hygiene
 
 Internal CaMeL metadata is removed before messages are sent to the configured model provider.
 
@@ -92,15 +98,15 @@ Internal CaMeL metadata is removed before messages are sent to the configured mo
 
 ### Hermes runtime compatibility
 
-Validated against the Hermes runtime suite:
+Validated against the extended Hermes CaMeL suite:
 
 ```bash
-pytest -q tests/agent/test_camel_guard.py tests/test_run_agent.py
+pytest -q -o addopts='' tests/agent/test_camel_guard.py tests/agent/test_camel_benchmark.py tests/hermes_cli/test_camel_cli.py tests/hermes_cli/test_chat_skills_flag.py tests/test_run_agent.py
 ```
 
 Result:
 
-- `205 passed`
+- `223 passed`
 
 ### Paper-aligned indirect injection benchmark
 
@@ -118,6 +124,10 @@ Observed outcomes:
 Detailed notes:
 
 - [`docs/camel-benchmark.md`](docs/camel-benchmark.md)
+- [`docs/camel-runtime-comparison.md`](docs/camel-runtime-comparison.md)
+- [`docs/camel-live-runtime-comparison.md`](docs/camel-live-runtime-comparison.md)
+- [`docs/camel-architecture.md`](docs/camel-architecture.md)
+- [`docs/camel-trace.md`](docs/camel-trace.md)
 
 ## Install
 
@@ -140,26 +150,64 @@ Use the `camelup` installer repo to apply this fork or switch an existing checko
 
 ## Runtime Modes
 
-This fork now supports two explicit runtime behaviors from the same checkout:
+This fork now supports three explicit runtime behaviors from the same checkout:
 
-- guarded runtime: CaMeL trust boundaries enforced
+- monitor runtime: CaMeL records policy decisions but does not block tools
+- guarded runtime: CaMeL trust boundaries are enforced
 - legacy runtime: CaMeL disabled for compatibility or comparison
 
 Examples:
 
 ```bash
-hermes --camel-guard on
+hermes --camel-guard monitor
+hermes --camel-guard enforce
 hermes --camel-guard off
 hermes chat --camel-guard monitor -q "Summarize the report"
 ```
 
 Mode behavior:
 
-- `on` or `enforce`: full CaMeL enforcement
-- `monitor`: record and surface trust-boundary decisions without enforcing blocks
+- `on` or `monitor`: enable CaMeL in non-blocking monitor mode
+- `enforce`: full CaMeL enforcement
 - `off` or `legacy`: disable CaMeL and run the legacy runtime behavior
 
 This keeps one codebase and one install path while making it easy to compare guarded and legacy behavior side by side.
+
+The runtime integration stays intentionally narrow:
+
+- no per-turn system-prompt mutation
+- no wrapped tool-result protocol
+- a small `run_agent.py` diff around tool decisions, tracing, and final-response sanitation
+- policy logic isolated in `agent/camel_guard.py`
+
+If you want a dedicated cheap model for the classifier, configure:
+
+```yaml
+auxiliary:
+  camel_guard:
+    provider: auto
+    model: ""
+```
+
+## Trace And Replay Workflow
+
+CaMeL now includes a trace layer that records the operator request, untrusted sources, and tool decisions per turn.
+
+Examples:
+
+```bash
+hermes camel trace
+hermes camel trace --session <session_id> --format markdown
+hermes camel benchmark --write-doc
+```
+
+Trace files are written under:
+
+```text
+~/.hermes/camel_traces/
+```
+
+Start with `--camel-guard monitor` if you want visibility before enforcement, then switch to `--camel-guard enforce` once the workflow is dialed in.
 
 ## Developer setup
 
@@ -180,9 +228,14 @@ pytest -q tests/agent/test_camel_guard.py tests/test_run_agent.py
 - `agent/camel_guard.py`
 - `run_agent.py`
 - `hermes_cli/config.py`
+- `hermes_cli/main.py`
 - `tests/agent/test_camel_guard.py`
+- `tests/agent/test_camel_benchmark.py`
 - `tests/test_run_agent.py`
 - `docs/camel-benchmark.md`
+- `docs/camel-runtime-comparison.md`
+- `docs/camel-architecture.md`
+- `docs/camel-trace.md`
 
 ## Scope
 

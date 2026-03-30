@@ -9,7 +9,9 @@ The goal is not to claim a full reproduction of the paper's AgentDojo benchmark.
 - compatibility evidence against Hermes' existing runtime behavior
 - a paper-aligned micro-benchmark for the `important_instructions` indirect prompt-injection pattern used by the CaMeL paper/repo
 
-For a direct `--camel-guard off` vs `--camel-guard on` comparison using a hidden-text job-application PDF fixture, see [camel-runtime-comparison.md](/Users/native/Downloads/hermes-agent-camel/docs/camel-runtime-comparison.md).
+For a direct `--camel-guard off` vs `--camel-guard monitor` vs `--camel-guard enforce` comparison using a hidden-text job-application PDF fixture, see [camel-runtime-comparison.md](/Users/native/Downloads/hermes-agent-camel/docs/camel-runtime-comparison.md).
+
+For the live-runtime benchmark that uses real model calls, a live auxiliary classifier, safe tool stubs, and per-mode token accounting, see [camel-live-runtime-comparison.md](/Users/native/Downloads/hermes-agent-camel/docs/camel-live-runtime-comparison.md).
 
 Reference implementation studied:
 
@@ -21,10 +23,11 @@ Reference implementation studied:
 Hermes now has a core runtime trust boundary with these properties:
 
 - trusted operator control is derived from real user turns only
+- a single isolated auxiliary-model classifier builds the trusted capability plan lazily, only when a sensitive decision under untrusted context requires it
 - synthetic system-control turns do not pollute the trusted plan
 - tool outputs are treated as untrusted data by default
 - sensitive tools are authorized against a trusted capability plan
-- a turn security envelope is injected into the system context on every iteration
+- the runtime infers untrusted context from tool-call lineage instead of rewriting tool results
 - internal CaMeL metadata is stripped before provider API calls
 - automatic memory flush is also gated by the same policy layer
 
@@ -46,7 +49,7 @@ pytest -q tests/agent/test_camel_guard.py tests/test_run_agent.py
 
 Result:
 
-- `205 passed`
+- `223 passed`
 
 Interpretation:
 

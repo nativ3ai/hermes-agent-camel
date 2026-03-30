@@ -39,11 +39,14 @@ Usage:
     hermes uninstall           Uninstall Hermes Agent
     hermes acp                 Run as an ACP server for editor integration
     hermes sessions browse     Interactive session picker with search
+    hermes camel trace         Inspect CaMeL trace artifacts
+    hermes camel benchmark     Run the bundled CaMeL benchmark suite
 
     hermes claw migrate --dry-run  # Preview migration without changes
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -91,6 +94,179 @@ def _relative_time(ts) -> str:
     if delta < 604800:
         return f"{int(delta / 86400)}d ago"
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+
+
+def _camel_trace_dir() -> Path:
+    return get_hermes_home() / "camel_traces"
+
+
+def _list_camel_trace_files() -> list[Path]:
+    trace_dir = _camel_trace_dir()
+    if not trace_dir.exists():
+        return []
+    return sorted(
+        trace_dir.glob("camel_trace_*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _load_camel_trace(session_id: Optional[str] = None) -> dict:
+    files = _list_camel_trace_files()
+    if not files:
+        raise FileNotFoundError("No CaMeL trace files found.")
+
+    if not session_id:
+        return json.loads(files[0].read_text(encoding="utf-8"))
+
+    normalized = session_id.strip()
+    exact = _camel_trace_dir() / f"camel_trace_{normalized}.json"
+    if exact.exists():
+        return json.loads(exact.read_text(encoding="utf-8"))
+
+    matches: list[dict] = []
+    for path in files:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        candidate = str(payload.get("session_id") or "")
+        if candidate == normalized or candidate.startswith(normalized):
+            matches.append(payload)
+    if not matches:
+        raise FileNotFoundError(f"No CaMeL trace found for session '{session_id}'.")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Session id prefix '{session_id}' is ambiguous across {len(matches)} traces. Use a longer id."
+        )
+    return matches[0]
+
+
+def _camel_trace_tool_status(runtime_mode: str, allowed: bool) -> str:
+    if allowed:
+        return "allowed"
+    if runtime_mode == "monitor":
+        return "monitor-only"
+    if runtime_mode == "enforce":
+        return "blocked"
+    return "blocked"
+
+
+def _render_camel_trace_summary(trace: dict) -> str:
+    summary = trace.get("summary") or {}
+    turns = trace.get("turns") or []
+    lines = [
+        "CaMeL Trace",
+        f"Session: {trace.get('session_id') or '[unknown]'}",
+        f"Runtime mode: {trace.get('runtime_mode') or '[unknown]'}",
+        f"Turns: {summary.get('turn_count', len(turns))}",
+        f"Policy alerts: {summary.get('policy_alert_count', 0)}",
+        f"Response alerts: {summary.get('response_alert_count', 0)}",
+        f"Untrusted sources: {', '.join(summary.get('unique_untrusted_sources') or []) or 'none'}",
+    ]
+
+    for turn in turns:
+        lines.extend(
+            [
+                "",
+                f"Turn {turn.get('turn_index', '?')}",
+                f"  Request: {turn.get('operator_request') or '[none]'}",
+                f"  Goal: {turn.get('goal_summary') or '[none]'}",
+                f"  Sources: {', '.join(turn.get('untrusted_sources') or []) or 'none'}",
+            ]
+        )
+        flag_counts = turn.get("suspicious_flags") or {}
+        if flag_counts:
+            rendered_flags = ", ".join(
+                f"{flag} x{count}" if count > 1 else flag
+                for flag, count in sorted(flag_counts.items())
+            )
+            lines.append(f"  Suspicious flags: {rendered_flags}")
+        markers = turn.get("output_markers") or []
+        if markers:
+            lines.append(f"  Output markers: {', '.join(markers[:4])}")
+
+        for decision in turn.get("tool_decisions") or []:
+            capability = decision.get("capability") or "read_only"
+            status = _camel_trace_tool_status(turn.get("runtime_mode") or trace.get("runtime_mode"), bool(decision.get("allowed")))
+            lines.append(
+                f"  Tool {decision.get('tool_name')} [{capability}]: {status} - {decision.get('reason')}"
+            )
+
+        response = turn.get("response_decision")
+        if response:
+            status = "clean" if response.get("allowed") else (
+                "flagged" if (turn.get("runtime_mode") or trace.get("runtime_mode")) == "monitor" else "sanitized"
+            )
+            lines.append(f"  Response: {status} - {response.get('reason')}")
+            if response.get("matched_markers"):
+                lines.append(f"    Markers: {', '.join(response['matched_markers'])}")
+            if response.get("final_preview"):
+                lines.append(f"    Final preview: {response.get('final_preview')}")
+
+    return "\n".join(lines) + "\n"
+
+
+def _render_camel_trace_markdown(trace: dict) -> str:
+    summary = trace.get("summary") or {}
+    turns = trace.get("turns") or []
+    lines = [
+        "# CaMeL Trace",
+        "",
+        f"- Session: `{trace.get('session_id') or '[unknown]'}`",
+        f"- Runtime mode: `{trace.get('runtime_mode') or '[unknown]'}`",
+        f"- Turns: `{summary.get('turn_count', len(turns))}`",
+        f"- Policy alerts: `{summary.get('policy_alert_count', 0)}`",
+        f"- Response alerts: `{summary.get('response_alert_count', 0)}`",
+        f"- Untrusted sources: {', '.join(summary.get('unique_untrusted_sources') or []) or 'none'}",
+        "",
+    ]
+
+    for turn in turns:
+        lines.extend(
+            [
+                f"## Turn {turn.get('turn_index', '?')}",
+                "",
+                f"- Request: {turn.get('operator_request') or '[none]'}",
+                f"- Goal: {turn.get('goal_summary') or '[none]'}",
+                f"- Sources: {', '.join(turn.get('untrusted_sources') or []) or 'none'}",
+            ]
+        )
+        flags = turn.get("suspicious_flags") or {}
+        if flags:
+            rendered_flags = ", ".join(
+                f"{flag} x{count}" if count > 1 else flag
+                for flag, count in sorted(flags.items())
+            )
+            lines.append(f"- Suspicious flags: {rendered_flags}")
+        markers = turn.get("output_markers") or []
+        if markers:
+            lines.append(f"- Output markers: {', '.join(markers[:4])}")
+        lines.extend(["", "| Tool | Capability | Result | Reason |", "| --- | --- | --- | --- |"])
+        for decision in turn.get("tool_decisions") or []:
+            status = _camel_trace_tool_status(turn.get("runtime_mode") or trace.get("runtime_mode"), bool(decision.get("allowed")))
+            lines.append(
+                f"| `{decision.get('tool_name')}` | `{decision.get('capability') or 'read_only'}` | `{status}` | {decision.get('reason')} |"
+            )
+        response = turn.get("response_decision")
+        if response:
+            status = "clean" if response.get("allowed") else (
+                "flagged" if (turn.get("runtime_mode") or trace.get("runtime_mode")) == "monitor" else "sanitized"
+            )
+            lines.extend(
+                [
+                    "",
+                    f"- Response result: `{status}`",
+                    f"- Response reason: {response.get('reason')}",
+                ]
+            )
+            if response.get("matched_markers"):
+                lines.append(f"- Matched markers: {', '.join(response['matched_markers'])}")
+            if response.get("final_preview"):
+                lines.append(f"- Final preview: `{response.get('final_preview')}`")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _has_any_provider_configured() -> bool:
@@ -2970,6 +3146,8 @@ Examples:
     hermes sessions list          List past sessions
     hermes sessions browse        Interactive session picker
     hermes sessions rename ID T   Rename/title a session
+    hermes camel trace --format markdown
+    hermes camel benchmark --write-doc
     hermes update                 Update to latest version
 
 For more help on a command:
@@ -3859,6 +4037,101 @@ For more help on a command:
         db.close()
 
     sessions_parser.set_defaults(func=cmd_sessions)
+
+    # =========================================================================
+    # camel command
+    # =========================================================================
+    camel_parser = subparsers.add_parser(
+        "camel",
+        help="Inspect CaMeL trace artifacts and benchmarks",
+        description="Inspect persisted CaMeL traces or rerun the bundled benchmark suite",
+    )
+    camel_subparsers = camel_parser.add_subparsers(dest="camel_action")
+
+    camel_trace = camel_subparsers.add_parser("trace", help="Show a persisted CaMeL trace")
+    camel_trace.add_argument(
+        "--session",
+        dest="session_id",
+        help="Session ID or unique prefix to inspect. Defaults to the latest trace.",
+    )
+    camel_trace.add_argument(
+        "--format",
+        choices=["summary", "json", "markdown"],
+        default="summary",
+        help="Output format",
+    )
+    camel_trace.add_argument(
+        "--output",
+        help="Write the rendered trace to a file instead of stdout",
+    )
+
+    camel_benchmark = camel_subparsers.add_parser("benchmark", help="Run the bundled CaMeL benchmark suite")
+    camel_benchmark.add_argument("--json", action="store_true", help="Print JSON instead of markdown")
+    camel_benchmark.add_argument(
+        "--write-doc",
+        action="store_true",
+        help="Write the benchmark markdown report to docs/camel-runtime-comparison.md",
+    )
+
+    def cmd_camel(args):
+        action = args.camel_action or "trace"
+
+        if action == "trace":
+            try:
+                trace = _load_camel_trace(getattr(args, "session_id", None))
+            except (FileNotFoundError, ValueError) as exc:
+                print(f"Error: {exc}")
+                return
+
+            if args.format == "json":
+                rendered = json.dumps(trace, indent=2, ensure_ascii=False)
+            elif args.format == "markdown":
+                rendered = _render_camel_trace_markdown(trace)
+            else:
+                rendered = _render_camel_trace_summary(trace)
+
+            if args.output:
+                Path(args.output).write_text(rendered, encoding="utf-8")
+                print(f"Wrote CaMeL trace to {args.output}")
+            else:
+                print(rendered, end="" if rendered.endswith("\n") else "\n")
+            return
+
+        if action == "benchmark":
+            from agent.camel_benchmark import (
+                DOC_PATH,
+                render_markdown,
+                results_as_dicts,
+                run_policy_comparison,
+                run_response_comparison,
+                write_default_fixtures,
+            )
+
+            write_default_fixtures()
+            response_outcomes = run_response_comparison()
+            tool_outcomes = run_policy_comparison()
+
+            if args.write_doc:
+                DOC_PATH.write_text(render_markdown(response_outcomes, tool_outcomes), encoding="utf-8")
+
+            if args.json:
+                print(
+                    json.dumps(
+                        {
+                            "response_hijack": results_as_dicts(response_outcomes),
+                            "sensitive_tools": results_as_dicts(tool_outcomes),
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                )
+            else:
+                print(render_markdown(response_outcomes, tool_outcomes), end="")
+            return
+
+        camel_parser.print_help()
+
+    camel_parser.set_defaults(func=cmd_camel)
 
     # =========================================================================
     # insights command

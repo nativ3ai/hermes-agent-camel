@@ -164,9 +164,11 @@ DEFAULT_CONFIG = {
         "summary_base_url": None,
     },
     "camel_guard": {
-        "enabled": True,
-        "mode": "enforce",  # off | monitor | enforce
-        "wrap_untrusted_tool_results": True,
+        "enabled": False,
+        "mode": "monitor",  # off | monitor | enforce
+        "wrap_untrusted_tool_results": False,
+        "trace_enabled": True,
+        "trace_preview_chars": 220,
     },
     "smart_model_routing": {
         "enabled": False,
@@ -227,6 +229,12 @@ DEFAULT_CONFIG = {
         "flush_memories": {
             "provider": "auto",
             "model": "",
+            "base_url": "",
+            "api_key": "",
+        },
+        "camel_guard": {
+            "provider": "auto",
+            "model": "",           # fast/cheap model recommended (e.g. gemini-flash, haiku)
             "base_url": "",
             "api_key": "",
         },
@@ -1649,6 +1657,7 @@ def show_config():
     aux_tasks = {
         "Vision":      auxiliary.get('vision', {}),
         "Web extract": auxiliary.get('web_extract', {}),
+        "CaMeL guard": auxiliary.get('camel_guard', {}),
     }
     has_overrides = any(
         t.get('provider', 'auto') != 'auto' or t.get('model', '')

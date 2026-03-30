@@ -48,6 +48,7 @@ from pathlib import Path
 # Load .env from ~/.hermes/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
 from hermes_cli.env_loader import load_hermes_dotenv
+from hermes_cli.path_utils import terminal_cwd
 
 _hermes_home = Path(os.getenv("HERMES_HOME", Path.home() / ".hermes"))
 _project_env = Path(__file__).parent / '.env'
@@ -786,7 +787,7 @@ class AIAgent:
         except Exception:
             _camel_cfg = {}
         if camel_guard_mode is not None:
-            resolved_mode = normalize_camel_guard_mode(camel_guard_mode, default="enforce")
+            resolved_mode = normalize_camel_guard_mode(camel_guard_mode, default="monitor")
             _camel_cfg = dict(_camel_cfg or {})
             _camel_cfg["mode"] = resolved_mode
             _camel_cfg["enabled"] = resolved_mode != "off"
@@ -836,6 +837,10 @@ class AIAgent:
         self.logs_dir = hermes_home / "sessions"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.session_log_file = self.logs_dir / f"session_{self.session_id}.json"
+        self.camel_trace_dir = hermes_home / "camel_traces"
+        self.camel_trace_dir.mkdir(parents=True, exist_ok=True)
+        self.camel_trace_file = self.camel_trace_dir / f"camel_trace_{self.session_id}.json"
+        self._camel_guard.set_session_id(self.session_id)
         
         # Track conversation messages for session logging
         self._session_messages: List[Dict[str, Any]] = []
@@ -1656,6 +1661,10 @@ class AIAgent:
                 "message_count": len(cleaned),
                 "messages": cleaned,
             }
+            trace_summary = self._camel_guard.trace_summary()
+            if trace_summary.get("turn_count"):
+                entry["camel_trace_file"] = str(self.camel_trace_file)
+                entry["camel_trace_summary"] = trace_summary
 
             atomic_json_write(
                 self.session_log_file,
@@ -1663,10 +1672,36 @@ class AIAgent:
                 indent=2,
                 default=str,
             )
+            self._save_camel_trace()
 
         except Exception as e:
             if self.verbose_logging:
                 logging.warning(f"Failed to save session log: {e}")
+
+    def _save_camel_trace(self) -> None:
+        if not self._camel_guard.config.trace_enabled:
+            return
+
+        payload = self._camel_guard.trace_payload()
+        summary = payload.get("summary") or {}
+        if not summary.get("turn_count"):
+            return
+
+        payload.update(
+            {
+                "model": self.model,
+                "base_url": self.base_url,
+                "platform": self.platform,
+                "session_start": self.session_start.isoformat(),
+            }
+        )
+
+        atomic_json_write(
+            self.camel_trace_file,
+            payload,
+            indent=2,
+            default=str,
+        )
     
     def interrupt(self, message: str = None) -> None:
         """
@@ -2017,9 +2052,6 @@ class AIAgent:
             tool_guidance.append(SESSION_SEARCH_GUIDANCE)
         if "skill_manage" in self.valid_tool_names:
             tool_guidance.append(SKILLS_GUIDANCE)
-        camel_guidance = self._camel_guard.system_prompt_guidance()
-        if camel_guidance:
-            tool_guidance.append(camel_guidance)
         if tool_guidance:
             prompt_parts.append(" ".join(tool_guidance))
 
@@ -2200,16 +2232,12 @@ class AIAgent:
         return self._camel_guard.evaluate_tool_call(function_name, function_args)
 
     def _camel_make_tool_message(self, function_name: str, function_result: str, tool_call_id: str) -> Dict[str, Any]:
-        wrapped_content, is_untrusted = self._camel_guard.wrap_tool_result(function_name, function_result)
-        tool_msg = {
+        wrapped_content, _ = self._camel_guard.wrap_tool_result(function_name, function_result)
+        return {
             "role": "tool",
             "content": wrapped_content,
             "tool_call_id": tool_call_id,
         }
-        if is_untrusted:
-            tool_msg["_camel_untrusted"] = True
-            tool_msg["_camel_source"] = function_name
-        return tool_msg
 
     def _camel_blocked_tool_result(self, function_name: str, decision: CamelDecision) -> str:
         payload = {
@@ -4165,9 +4193,6 @@ class AIAgent:
                 api_messages.append(api_msg)
 
             effective_system = self._cached_system_prompt or ""
-            camel_envelope = self._camel_guard.render_security_envelope()
-            if camel_envelope:
-                effective_system = (effective_system + "\n\n" + camel_envelope).strip()
             if effective_system:
                 api_messages = [{"role": "system", "content": effective_system}] + api_messages
 
@@ -4480,7 +4505,7 @@ class AIAgent:
                 try:
                     cmd = function_args.get("command", "")
                     if _is_destructive_command(cmd):
-                        cwd = function_args.get("workdir") or os.getenv("TERMINAL_CWD", os.getcwd())
+                        cwd = function_args.get("workdir") or terminal_cwd()
                         self._checkpoint_mgr.ensure_checkpoint(
                             cwd, f"before terminal: {cmd[:60]}"
                         )
@@ -4695,7 +4720,7 @@ class AIAgent:
                 try:
                     cmd = function_args.get("command", "")
                     if _is_destructive_command(cmd):
-                        cwd = function_args.get("workdir") or os.getenv("TERMINAL_CWD", os.getcwd())
+                        cwd = function_args.get("workdir") or terminal_cwd()
                         self._checkpoint_mgr.ensure_checkpoint(
                             cwd, f"before terminal: {cmd[:60]}"
                         )
@@ -4960,9 +4985,6 @@ class AIAgent:
                 api_messages.append(api_msg)
 
             effective_system = self._cached_system_prompt or ""
-            camel_envelope = self._camel_guard.render_security_envelope()
-            if camel_envelope:
-                effective_system = (effective_system + "\n\n" + camel_envelope).strip()
             if self.ephemeral_system_prompt:
                 effective_system = (effective_system + "\n\n" + self.ephemeral_system_prompt).strip()
             if effective_system:
@@ -5416,9 +5438,6 @@ class AIAgent:
             # Honcho later-turn recall is intentionally kept OUT of the system prompt
             # so the stable cache prefix remains unchanged.
             effective_system = active_system_prompt or ""
-            camel_envelope = self._camel_guard.render_security_envelope()
-            if camel_envelope:
-                effective_system = (effective_system + "\n\n" + camel_envelope).strip()
             if self.ephemeral_system_prompt:
                 effective_system = (effective_system + "\n\n" + self.ephemeral_system_prompt).strip()
             if effective_system:
