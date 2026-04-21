@@ -44,6 +44,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -1148,6 +1149,8 @@ def cmd_chat(args):
         "pass_session_id": getattr(args, "pass_session_id", False),
         "max_turns": getattr(args, "max_turns", None),
     }
+    if getattr(args, "camel_guard", None):
+        kwargs["camel_guard"] = args.camel_guard
     # Filter out None values
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
@@ -1156,6 +1159,63 @@ def cmd_chat(args):
     except ValueError as e:
         print(f"Error: {e}")
         sys.exit(1)
+
+
+def _load_camel_trace(session_id: str | None = None) -> dict:
+    """Load CaMeL trace data from ~/.hermes/camel_trace.json (or session variant)."""
+    from hermes_cli.config import get_hermes_home
+
+    home = get_hermes_home()
+    if session_id:
+        session_path = home / f"camel_trace_{session_id}.json"
+        if session_path.exists():
+            return json.loads(session_path.read_text(encoding="utf-8"))
+    default_path = home / "camel_trace.json"
+    if not default_path.exists():
+        return {
+            "session_id": session_id or "",
+            "runtime_mode": "unknown",
+            "summary": {"turn_count": 0, "policy_alert_count": 0, "response_alert_count": 0},
+            "turns": [],
+        }
+    return json.loads(default_path.read_text(encoding="utf-8"))
+
+
+def cmd_camel(args):
+    """CaMeL benchmark and trace utilities."""
+    action = getattr(args, "camel_action", None)
+
+    if action == "trace":
+        trace = _load_camel_trace(getattr(args, "session", None))
+        if getattr(args, "format", "pretty") == "json":
+            print(json.dumps(trace, indent=2, ensure_ascii=False))
+        else:
+            summary = trace.get("summary") or {}
+            print(f"session_id: {trace.get('session_id', '')}")
+            print(f"runtime_mode: {trace.get('runtime_mode', 'unknown')}")
+            print(
+                "turn_count: {turn_count} policy_alert_count: {policy_alert_count} response_alert_count: {response_alert_count}".format(
+                    turn_count=summary.get("turn_count", 0),
+                    policy_alert_count=summary.get("policy_alert_count", 0),
+                    response_alert_count=summary.get("response_alert_count", 0),
+                )
+            )
+        return
+
+    if action == "benchmark":
+        from agent.camel_benchmark import (
+            render_markdown,
+            run_policy_comparison,
+            run_response_comparison,
+            write_default_fixtures,
+        )
+
+        write_default_fixtures()
+        response_rows = run_response_comparison()
+        tool_rows = run_policy_comparison()
+        markdown = render_markdown(response_rows, tool_rows)
+        print(markdown, end="" if markdown.endswith("\n") else "\n")
+        return
 
 
 def cmd_gateway(args):
@@ -5917,6 +5977,7 @@ def _coalesce_session_name_args(argv: list) -> list:
         "import",
         "completion",
         "logs",
+        "camel",
     }
     _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
 
@@ -6391,6 +6452,12 @@ For more help on a command:
         help="Include the session ID in the agent's system prompt",
     )
     parser.add_argument(
+        "--camel-guard",
+        choices=["off", "monitor", "enforce"],
+        default=None,
+        help="Override CaMeL guard runtime mode for this chat session",
+    )
+    parser.add_argument(
         "--tui",
         action="store_true",
         default=False,
@@ -6505,6 +6572,12 @@ For more help on a command:
         default=None,
         metavar="N",
         help="Maximum tool-calling iterations per conversation turn (default: 90, or agent.max_turns in config)",
+    )
+    chat_parser.add_argument(
+        "--camel-guard",
+        choices=["off", "monitor", "enforce"],
+        default=None,
+        help="Override CaMeL guard runtime mode for this chat session",
     )
     chat_parser.add_argument(
         "--yolo",
@@ -8189,6 +8262,36 @@ Examples:
             sys.exit(1)
 
     acp_parser.set_defaults(func=cmd_acp)
+
+    # =========================================================================
+    # camel command
+    # =========================================================================
+    camel_parser = subparsers.add_parser(
+        "camel",
+        help="CaMeL guard tools (benchmark + trace)",
+        description="Inspect CaMeL traces and run benchmark comparisons",
+    )
+    camel_subparsers = camel_parser.add_subparsers(dest="camel_action")
+
+    camel_trace = camel_subparsers.add_parser(
+        "trace", help="Show the latest CaMeL runtime trace"
+    )
+    camel_trace.add_argument(
+        "--session",
+        default=None,
+        help="Optional session id to load a session-specific trace file",
+    )
+    camel_trace.add_argument(
+        "--format",
+        choices=["pretty", "json"],
+        default="pretty",
+        help="Output format",
+    )
+
+    camel_subparsers.add_parser(
+        "benchmark", help="Run CaMeL benchmark comparison and print markdown report"
+    )
+    camel_parser.set_defaults(func=cmd_camel)
 
     # =========================================================================
     # profile command

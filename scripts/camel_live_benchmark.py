@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout
 from dataclasses import asdict, dataclass, field
+import inspect
 import io
 import json
 from pathlib import Path
@@ -414,23 +415,34 @@ def run_live_case(case: LiveCase, mode: str, model_cfg: dict[str, Any]) -> LiveO
         ),
         redirect_stdout(session_stdout),
     ):
-        agent = AIAgent(
-            model=model_cfg["model"],
-            provider=model_cfg["provider"],
-            base_url=model_cfg["base_url"],
-            quiet_mode=True,
-            skip_context_files=True,
-            skip_memory=True,
-            max_iterations=8,
-            camel_guard_mode=mode,
-        )
+        init_params = inspect.signature(AIAgent.__init__).parameters
+        agent_kwargs: dict[str, Any] = {
+            "model": model_cfg["model"],
+            "provider": model_cfg["provider"],
+            "base_url": model_cfg["base_url"],
+            "quiet_mode": True,
+            "skip_context_files": True,
+            "skip_memory": True,
+            "max_iterations": 8,
+        }
+        if "camel_guard_mode" in init_params:
+            agent_kwargs["camel_guard_mode"] = mode
+        elif "camel_guard" in init_params:
+            agent_kwargs["camel_guard"] = mode
+        agent = AIAgent(**agent_kwargs)
+        if "camel_guard_mode" not in init_params and "camel_guard" not in init_params:
+            guard = getattr(agent, "_camel_guard", None)
+            if guard and getattr(guard, "config", None):
+                guard.config.mode = mode
+                guard.config.enabled = mode != "off"
         start = time.monotonic()
         result = agent.run_conversation(case.user_prompt, conversation_history=history)
         duration = time.monotonic() - start
 
     trace_payload: dict[str, Any] = {}
-    trace_path = Path(agent.camel_trace_file)
-    if trace_path.exists():
+    raw_trace_file = getattr(agent, "camel_trace_file", "")
+    trace_path = Path(raw_trace_file) if raw_trace_file else None
+    if trace_path and trace_path.exists():
         trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
     trace_summary = trace_payload.get("summary") or {}
     allowed = _summarize_allowed_tools(trace_payload)
@@ -472,8 +484,8 @@ def run_live_case(case: LiveCase, mode: str, model_cfg: dict[str, Any]) -> LiveO
         auxiliary_estimated_cost_usd=aux_bucket.estimated_cost_usd,
         duration_seconds=duration,
         api_calls=int(result.get("api_calls") or 0),
-        session_file=str(agent.session_log_file),
-        trace_file=str(agent.camel_trace_file),
+        session_file=str(getattr(agent, "session_log_file", "")),
+        trace_file=str(trace_path) if trace_path else "",
     )
 
 

@@ -124,6 +124,11 @@ from agent.trajectory import (
     convert_scratchpad_to_think, has_incomplete_scratchpad,
     save_trajectory as _save_trajectory_to_file,
 )
+from agent.camel_guard import (
+    CamelGuard,
+    CamelGuardConfig,
+    normalize_camel_guard_mode,
+)
 from utils import atomic_json_write, env_var_enabled
 
 
@@ -716,6 +721,7 @@ class AIAgent:
         args: list[str] | None = None,
         model: str = "",
         max_iterations: int = 90,  # Default tool-calling iterations (shared with subagents)
+        camel_guard_mode: str | None = None,
         tool_delay: float = 1.0,
         enabled_toolsets: List[str] = None,
         disabled_toolsets: List[str] = None,
@@ -1400,6 +1406,17 @@ class AIAgent:
             _agent_cfg = _load_agent_config()
         except Exception:
             _agent_cfg = {}
+        _camel_cfg = dict((_agent_cfg or {}).get("camel_guard") or {})
+        if camel_guard_mode is not None:
+            resolved_mode = normalize_camel_guard_mode(camel_guard_mode, default="monitor")
+            _camel_cfg["mode"] = resolved_mode
+            _camel_cfg["enabled"] = resolved_mode != "off"
+        self._camel_guard = CamelGuard(CamelGuardConfig.from_dict(_camel_cfg))
+        if hasattr(self._camel_guard, "set_session_id"):
+            self._camel_guard.set_session_id(self.session_id)
+        self.camel_trace_dir = hermes_home / "camel_traces"
+        self.camel_trace_dir.mkdir(parents=True, exist_ok=True)
+        self.camel_trace_file = self.camel_trace_dir / f"camel_trace_{self.session_id}.json"
         # Cache only the derived auxiliary compression context override that is
         # needed later by the startup feasibility check.  Avoid exposing a
         # broad pseudo-public config object on the agent instance.
@@ -2876,7 +2893,29 @@ class AIAgent:
         self._apply_persist_user_message_override(messages)
         self._session_messages = messages
         self._save_session_log(messages)
+        self._save_camel_trace()
         self._flush_messages_to_session_db(messages, conversation_history)
+
+    def _save_camel_trace(self) -> None:
+        """Persist CaMeL trace payload for CLI tools and benchmarks."""
+        guard = getattr(self, "_camel_guard", None)
+        if not guard:
+            return
+        payload_fn = getattr(guard, "trace_payload", None)
+        if not callable(payload_fn):
+            return
+        try:
+            payload = payload_fn()
+            if not isinstance(payload, dict):
+                return
+            if getattr(self, "camel_trace_file", None):
+                atomic_json_write(payload, self.camel_trace_file)
+            hermes_home = get_hermes_home()
+            atomic_json_write(payload, hermes_home / "camel_trace.json")
+            if self.session_id:
+                atomic_json_write(payload, hermes_home / f"camel_trace_{self.session_id}.json")
+        except Exception as exc:
+            logger.debug("Failed to save CaMeL trace: %s", exc)
 
     def _flush_messages_to_session_db(self, messages: List[Dict], conversation_history: List[Dict] = None):
         """Persist any un-flushed messages to the SQLite session store.
@@ -7669,7 +7708,7 @@ class AIAgent:
             return
 
         # ── Parse args + pre-execution bookkeeping ───────────────────────
-        parsed_calls = []  # list of (tool_call, function_name, function_args)
+        parsed_calls = []  # list of (tool_call, function_name, function_args, camel_decision)
         for tool_call in tool_calls:
             function_name = tool_call.function.name
 
@@ -7685,6 +7724,20 @@ class AIAgent:
                 function_args = {}
             if not isinstance(function_args, dict):
                 function_args = {}
+
+            camel_decision = self._camel_guard.evaluate_tool_call(function_name, function_args)
+            _camel_blocked = (
+                not camel_decision.allowed and self._camel_guard.config.mode == "enforce"
+            )
+            _camel_blocked = (
+                not camel_decision.allowed and self._camel_guard.config.mode == "enforce"
+            )
+            _camel_blocked = (
+                not camel_decision.allowed and self._camel_guard.config.mode == "enforce"
+            )
+            if not camel_decision.allowed and self._camel_guard.config.mode == "enforce":
+                parsed_calls.append((tool_call, function_name, function_args, camel_decision))
+                continue
 
             # Checkpoint for file-mutating tools
             if function_name in ("write_file", "patch") and self._checkpoint_mgr.enabled:
@@ -7708,13 +7761,13 @@ class AIAgent:
                 except Exception:
                     pass
 
-            parsed_calls.append((tool_call, function_name, function_args))
+            parsed_calls.append((tool_call, function_name, function_args, camel_decision))
 
         # ── Logging / callbacks ──────────────────────────────────────────
-        tool_names_str = ", ".join(name for _, name, _ in parsed_calls)
+        tool_names_str = ", ".join(name for _, name, _, _ in parsed_calls)
         if not self.quiet_mode:
             print(f"  ⚡ Concurrent: {num_tools} tool calls — {tool_names_str}")
-            for i, (tc, name, args) in enumerate(parsed_calls, 1):
+            for i, (tc, name, args, _) in enumerate(parsed_calls, 1):
                 args_str = json.dumps(args, ensure_ascii=False)
                 if self.verbose_logging:
                     print(f"  📞 Tool {i}: {name}({list(args.keys())})")
@@ -7723,7 +7776,9 @@ class AIAgent:
                     args_preview = args_str[:self.log_prefix_chars] + "..." if len(args_str) > self.log_prefix_chars else args_str
                     print(f"  📞 Tool {i}: {name}({list(args.keys())}) - {args_preview}")
 
-        for tc, name, args in parsed_calls:
+        for tc, name, args, camel_decision in parsed_calls:
+            if not camel_decision.allowed and self._camel_guard.config.mode == "enforce":
+                continue
             if self.tool_progress_callback:
                 try:
                     preview = _build_tool_preview(name, args)
@@ -7731,7 +7786,9 @@ class AIAgent:
                 except Exception as cb_err:
                     logging.debug(f"Tool progress callback error: {cb_err}")
 
-        for tc, name, args in parsed_calls:
+        for tc, name, args, camel_decision in parsed_calls:
+            if not camel_decision.allowed and self._camel_guard.config.mode == "enforce":
+                continue
             if self.tool_start_callback:
                 try:
                     self.tool_start_callback(tc.id, name, args)
@@ -7809,9 +7866,13 @@ class AIAgent:
             max_workers = min(num_tools, _MAX_TOOL_WORKERS)
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = []
-                for i, (tc, name, args) in enumerate(parsed_calls):
+                future_to_name = {}
+                for i, (tc, name, args, camel_decision) in enumerate(parsed_calls):
+                    if not camel_decision.allowed and self._camel_guard.config.mode == "enforce":
+                        continue
                     f = executor.submit(_run_tool, i, tc, name, args)
                     futures.append(f)
+                    future_to_name[f] = name
 
                 # Wait for all to complete with periodic heartbeats so the
                 # gateway's inactivity monitor doesn't kill us during long
@@ -7851,7 +7912,7 @@ class AIAgent:
                     # Heartbeat every ~30s (6 × 5s poll intervals)
                     if _conc_elapsed > 0 and _conc_elapsed % 30 < 6:
                         _still_running = [
-                            parsed_calls[futures.index(f)][1]
+                            future_to_name.get(f, "tool")
                             for f in not_done
                             if f in futures
                         ]
@@ -7867,15 +7928,22 @@ class AIAgent:
                 spinner.stop(f"⚡ {completed}/{num_tools} tools completed in {total_dur:.1f}s total")
 
         # ── Post-execution: display per-tool results ─────────────────────
-        for i, (tc, name, args) in enumerate(parsed_calls):
+        for i, (tc, name, args, camel_decision) in enumerate(parsed_calls):
             r = results[i]
-            if r is None:
+            if not camel_decision.allowed and self._camel_guard.config.mode == "enforce":
+                function_result = (
+                    f"CaMeL guard blocked tool '{name}': {camel_decision.reason}"
+                )
+                tool_duration = 0.0
+                is_error = False
+            elif r is None:
                 # Tool was cancelled (interrupt) or thread didn't return
                 if self._interrupt_requested:
                     function_result = f"[Tool execution cancelled — {name} was skipped due to user interrupt]"
                 else:
                     function_result = f"Error executing tool '{name}': thread did not return a result"
                 tool_duration = 0.0
+                is_error = True
             else:
                 function_name, function_args, function_result, tool_duration, is_error = r
 
@@ -7917,6 +7985,7 @@ class AIAgent:
                 except Exception as cb_err:
                     logging.debug(f"Tool complete callback error: {cb_err}")
 
+            function_result, _ = self._camel_guard.wrap_tool_result(name, function_result)
             function_result = maybe_persist_tool_result(
                 content=function_result,
                 tool_name=name,
@@ -7983,6 +8052,11 @@ class AIAgent:
             if not isinstance(function_args, dict):
                 function_args = {}
 
+            camel_decision = self._camel_guard.evaluate_tool_call(function_name, function_args)
+            _camel_blocked = (
+                not camel_decision.allowed and self._camel_guard.config.mode == "enforce"
+            )
+
             # Check plugin hooks for a block directive before executing.
             _block_msg: Optional[str] = None
             try:
@@ -7993,7 +8067,7 @@ class AIAgent:
             except Exception:
                 pass
 
-            if _block_msg is not None:
+            if _block_msg is not None or _camel_blocked:
                 # Tool blocked by plugin policy — skip counter resets.
                 # Execution is handled below in the tool dispatch chain.
                 pass
@@ -8013,35 +8087,35 @@ class AIAgent:
                     args_preview = args_str[:self.log_prefix_chars] + "..." if len(args_str) > self.log_prefix_chars else args_str
                     print(f"  📞 Tool {i}: {function_name}({list(function_args.keys())}) - {args_preview}")
 
-            if _block_msg is None:
+            if _block_msg is None and not _camel_blocked:
                 self._current_tool = function_name
                 self._touch_activity(f"executing tool: {function_name}")
 
             # Set activity callback for long-running tool execution (terminal
             # commands, etc.) so the gateway's inactivity monitor doesn't kill
             # the agent while a command is running.
-            if _block_msg is None:
+            if _block_msg is None and not _camel_blocked:
                 try:
                     from tools.environments.base import set_activity_callback
                     set_activity_callback(self._touch_activity)
                 except Exception:
                     pass
 
-            if _block_msg is None and self.tool_progress_callback:
+            if _block_msg is None and not _camel_blocked and self.tool_progress_callback:
                 try:
                     preview = _build_tool_preview(function_name, function_args)
                     self.tool_progress_callback("tool.started", function_name, preview, function_args)
                 except Exception as cb_err:
                     logging.debug(f"Tool progress callback error: {cb_err}")
 
-            if _block_msg is None and self.tool_start_callback:
+            if _block_msg is None and not _camel_blocked and self.tool_start_callback:
                 try:
                     self.tool_start_callback(tool_call.id, function_name, function_args)
                 except Exception as cb_err:
                     logging.debug(f"Tool start callback error: {cb_err}")
 
             # Checkpoint: snapshot working dir before file-mutating tools
-            if _block_msg is None and function_name in ("write_file", "patch") and self._checkpoint_mgr.enabled:
+            if _block_msg is None and not _camel_blocked and function_name in ("write_file", "patch") and self._checkpoint_mgr.enabled:
                 try:
                     file_path = function_args.get("path", "")
                     if file_path:
@@ -8053,7 +8127,7 @@ class AIAgent:
                     pass  # never block tool execution
 
             # Checkpoint before destructive terminal commands
-            if _block_msg is None and function_name == "terminal" and self._checkpoint_mgr.enabled:
+            if _block_msg is None and not _camel_blocked and function_name == "terminal" and self._checkpoint_mgr.enabled:
                 try:
                     cmd = function_args.get("command", "")
                     if _is_destructive_command(cmd):
@@ -8066,7 +8140,12 @@ class AIAgent:
 
             tool_start_time = time.time()
 
-            if _block_msg is not None:
+            if not camel_decision.allowed and self._camel_guard.config.mode == "enforce":
+                function_result = (
+                    f"CaMeL guard blocked tool '{function_name}': {camel_decision.reason}"
+                )
+                tool_duration = 0.0
+            elif _block_msg is not None:
                 # Tool blocked by plugin policy — return error without executing.
                 function_result = json.dumps({"error": _block_msg}, ensure_ascii=False)
                 tool_duration = 0.0
@@ -8284,6 +8363,7 @@ class AIAgent:
                 except Exception as cb_err:
                     logging.debug(f"Tool complete callback error: {cb_err}")
 
+            function_result, _ = self._camel_guard.wrap_tool_result(function_name, function_result)
             function_result = maybe_persist_tool_result(
                 content=function_result,
                 tool_name=function_name,
@@ -8658,6 +8738,7 @@ class AIAgent:
 
         # Preserve the original user message (no nudge injection).
         original_user_message = persist_user_message if persist_user_message is not None else user_message
+        self._camel_guard.begin_turn(original_user_message, messages)
 
         # Track memory nudge trigger (turn-based, checked here).
         # Skill trigger is checked AFTER the agent loop completes, based on
@@ -8672,7 +8753,10 @@ class AIAgent:
                 self._turns_since_memory = 0
 
         # Add user message
-        user_msg = {"role": "user", "content": user_message}
+        user_msg = self._camel_guard.mark_user_message(
+            {"role": "user", "content": user_message},
+            operator_request=original_user_message,
+        )
         messages.append(user_msg)
         current_turn_user_idx = len(messages) - 1
         self._persist_user_message_idx = current_turn_user_idx

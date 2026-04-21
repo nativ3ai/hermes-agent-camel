@@ -475,11 +475,6 @@ DEFAULT_CONFIG = {
     },
 
     "camel_guard": {
-        "enabled": True,
-        "mode": "enforce",  # off | monitor | enforce
-        "wrap_untrusted_tool_results": True,
-    },
-    "camel_guard": {
         "enabled": False,
         "mode": "monitor",  # off | monitor | enforce
         "wrap_untrusted_tool_results": False,
@@ -491,7 +486,6 @@ DEFAULT_CONFIG = {
         "max_simple_chars": 160,
         "max_simple_words": 28,
         "cheap_model": {},
-    },
     },
 
     # Auxiliary model config — provider:model for each side task.

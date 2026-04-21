@@ -10,7 +10,8 @@ This module separates trusted control inputs from untrusted data inputs:
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 import json
 import re
 from typing import Any, Dict, Iterable, List, Sequence
@@ -208,6 +209,53 @@ def _extract_suspicious_flags(text: str) -> List[str]:
     return flags
 
 
+def _extract_first_json_object(text: str) -> Dict[str, Any] | None:
+    """Best-effort parse of the first JSON object in text."""
+    haystack = (text or "").strip()
+    if not haystack:
+        return None
+
+    try:
+        parsed = json.loads(haystack)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    start = haystack.find("{")
+    end = haystack.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    snippet = haystack[start : end + 1]
+    try:
+        parsed = json.loads(snippet)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _call_trusted_capability_classifier(messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Compatibility hook used by benchmark harnesses to instrument classifier calls."""
+    from agent.auxiliary_client import call_llm
+
+    response = call_llm(
+        task="camel_guard",
+        messages=messages,
+        temperature=0,
+        max_tokens=220,
+        timeout=12.0,
+    )
+    content = ""
+    if getattr(response, "choices", None):
+        choice = response.choices[0]
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", "") or ""
+    parsed = _extract_first_json_object(content)
+    if not parsed:
+        raise ValueError("CaMeL classifier returned invalid JSON")
+    return parsed
+
+
 def _normalize_for_match(text: str) -> str:
     return " ".join((text or "").split()).strip().casefold()
 
@@ -343,6 +391,22 @@ def _extract_untrusted_record(message: Dict[str, Any]) -> tuple[str, List[str], 
     return source, flags, markers
 
 
+def _tool_call_source_index(history: Sequence[Dict[str, Any]]) -> Dict[str, str]:
+    index: Dict[str, str] = {}
+    for message in history:
+        if message.get("role") != "assistant":
+            continue
+        for tool_call in message.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            call_id = str(tool_call.get("id") or "").strip()
+            function = tool_call.get("function") or {}
+            tool_name = str(function.get("name") or "").strip()
+            if call_id and tool_name:
+                index[call_id] = tool_name
+    return index
+
+
 def sanitize_message_for_api(message: Dict[str, Any]) -> Dict[str, Any]:
     """Drop internal guard bookkeeping before sending messages to providers."""
     sanitized = {}
@@ -439,6 +503,39 @@ class CamelResponseDecision:
 
 
 @dataclass
+class CamelToolDecisionTrace:
+    tool_name: str
+    capability: str
+    allowed: bool
+    reason: str
+    sources: List[str] = field(default_factory=list)
+
+
+@dataclass
+class CamelResponseTrace:
+    allowed: bool
+    reason: str
+    matched_markers: List[str] = field(default_factory=list)
+    original_preview: str = ""
+    final_preview: str = ""
+
+
+@dataclass
+class CamelTurnTrace:
+    turn_index: int
+    started_at: str
+    runtime_mode: str
+    operator_request: str = ""
+    goal_summary: str = ""
+    untrusted_sources: List[str] = field(default_factory=list)
+    untrusted_source_counts: Dict[str, int] = field(default_factory=dict)
+    suspicious_flags: Dict[str, int] = field(default_factory=dict)
+    output_markers: List[str] = field(default_factory=list)
+    tool_decisions: List[CamelToolDecisionTrace] = field(default_factory=list)
+    response_decision: CamelResponseTrace | None = None
+
+
+@dataclass
 class CamelGuard:
     config: CamelGuardConfig
     latest_trusted_user_message: str = ""
@@ -448,6 +545,12 @@ class CamelGuard:
     untrusted_source_counts: Dict[str, int] = field(default_factory=dict)
     untrusted_flag_counts: Dict[str, int] = field(default_factory=dict)
     untrusted_output_markers: List[str] = field(default_factory=list)
+    session_id: str = ""
+    trace_turns: List[CamelTurnTrace] = field(default_factory=list)
+    current_turn_trace: CamelTurnTrace | None = None
+
+    def set_session_id(self, session_id: str) -> None:
+        self.session_id = session_id or ""
 
     def mark_user_message(
         self,
@@ -502,6 +605,7 @@ class CamelGuard:
         self.untrusted_output_markers = []
 
         history_list = list(history or [])
+        source_index = _tool_call_source_index(history_list)
         for message in history_list:
             if (
                 message.get("role") == "user"
@@ -517,11 +621,35 @@ class CamelGuard:
             if record:
                 source, flags, markers = record
                 self._remember_untrusted_observation(source, flags, markers)
+                continue
+
+            # Backward-compatible behavior: treat historical tool outputs as
+            # untrusted even when they were not wrapped with _camel_guard tags.
+            if message.get("role") == "tool":
+                tool_call_id = str(message.get("tool_call_id") or "")
+                source_tool = source_index.get(tool_call_id) or "history_tool"
+                content = message.get("content", "")
+                text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+                flags = _extract_suspicious_flags(text)
+                markers = _extract_output_markers(text)
+                self._remember_untrusted_observation(_extract_source_label(source_tool), flags, markers)
 
         self.current_plan = CamelPlan.from_trusted_history(
             self.latest_trusted_user_message,
             self.trusted_user_history,
         )
+        self.current_turn_trace = CamelTurnTrace(
+            turn_index=len(self.trace_turns) + 1,
+            started_at=datetime.now(timezone.utc).isoformat(),
+            runtime_mode=self.config.mode if self.config.enabled else "off",
+            operator_request=self.current_plan.operator_request,
+            goal_summary=self.current_plan.goal_summary,
+            untrusted_sources=list(self.untrusted_sources),
+            untrusted_source_counts=dict(self.untrusted_source_counts),
+            suspicious_flags=dict(self.untrusted_flag_counts),
+            output_markers=list(self.untrusted_output_markers),
+        )
+        self.trace_turns.append(self.current_turn_trace)
 
     def system_prompt_guidance(self) -> str:
         if not self.config.enabled or self.config.mode == "off":
@@ -593,61 +721,98 @@ class CamelGuard:
         tool_args = tool_args or {}
 
         if not self.config.enabled or self.config.mode == "off":
-            return CamelDecision(True, "CaMeL disabled")
+            decision = CamelDecision(True, "CaMeL disabled")
+        else:
+            capability = _tool_capability(tool_name, tool_args)
+            if not capability:
+                decision = CamelDecision(True, "Tool is not policy-gated")
+            elif capability in self.current_plan.denied_capabilities:
+                decision = CamelDecision(
+                    False,
+                    f"Blocked by CaMeL guard: the trusted operator request explicitly denied {_CAPABILITY_LABELS.get(capability, capability)}",
+                    sources=list(self.untrusted_sources),
+                    capability=capability,
+                )
+            elif capability in self.current_plan.allowed_capabilities:
+                decision = CamelDecision(
+                    True,
+                    f"Trusted operator plan authorizes {_CAPABILITY_LABELS.get(capability, capability)}",
+                    sources=list(self.untrusted_sources),
+                    capability=capability,
+                )
+            elif not self.untrusted_sources:
+                decision = CamelDecision(
+                    True,
+                    "No untrusted data in current context",
+                    capability=capability,
+                )
+            else:
+                decision = CamelDecision(
+                    False,
+                    (
+                        f"Blocked by CaMeL guard: {tool_name} requires {_CAPABILITY_LABELS.get(capability, capability)} "
+                        f"but current context includes untrusted data from {', '.join(self.untrusted_sources)} "
+                        "and the trusted operator plan did not authorize that capability"
+                    ),
+                    sources=list(self.untrusted_sources),
+                    capability=capability,
+                )
 
-        capability = _tool_capability(tool_name, tool_args)
-        if not capability:
-            return CamelDecision(True, "Tool is not policy-gated")
-
-        if capability in self.current_plan.denied_capabilities:
-            return CamelDecision(
-                False,
-                f"Blocked by CaMeL guard: the trusted operator request explicitly denied {_CAPABILITY_LABELS.get(capability, capability)}",
-                sources=list(self.untrusted_sources),
-                capability=capability,
+        if self.current_turn_trace is not None:
+            self.current_turn_trace.tool_decisions.append(
+                CamelToolDecisionTrace(
+                    tool_name=tool_name,
+                    capability=decision.capability,
+                    allowed=decision.allowed,
+                    reason=decision.reason,
+                    sources=list(decision.sources),
+                )
             )
-
-        if capability in self.current_plan.allowed_capabilities:
-            return CamelDecision(
-                True,
-                f"Trusted operator plan authorizes {_CAPABILITY_LABELS.get(capability, capability)}",
-                sources=list(self.untrusted_sources),
-                capability=capability,
-            )
-
-        if not self.untrusted_sources:
-            return CamelDecision(
-                True,
-                "No untrusted data in current context",
-                capability=capability,
-            )
-
-        return CamelDecision(
-            False,
-            (
-                f"Blocked by CaMeL guard: {tool_name} requires {_CAPABILITY_LABELS.get(capability, capability)} "
-                f"but current context includes untrusted data from {', '.join(self.untrusted_sources)} "
-                "and the trusted operator plan did not authorize that capability"
-            ),
-            sources=list(self.untrusted_sources),
-            capability=capability,
-        )
+            self.current_turn_trace.untrusted_sources = list(self.untrusted_sources)
+            self.current_turn_trace.untrusted_source_counts = dict(self.untrusted_source_counts)
+            self.current_turn_trace.suspicious_flags = dict(self.untrusted_flag_counts)
+            self.current_turn_trace.output_markers = list(self.untrusted_output_markers)
+        return decision
 
     def evaluate_assistant_response(self, content: str) -> CamelResponseDecision:
         text = content or ""
         if not self.config.enabled or self.config.mode == "off" or not text.strip():
-            return CamelResponseDecision(True, "CaMeL disabled or empty response", text)
+            decision = CamelResponseDecision(True, "CaMeL disabled or empty response", text)
+            if self.current_turn_trace is not None:
+                self.current_turn_trace.response_decision = CamelResponseTrace(
+                    allowed=decision.allowed,
+                    reason=decision.reason,
+                    original_preview=_truncate(text, 180),
+                    final_preview=_truncate(decision.content, 180),
+                )
+            return decision
 
         if not self.untrusted_output_markers:
-            return CamelResponseDecision(True, "No embedded output directives observed", text)
+            decision = CamelResponseDecision(True, "No embedded output directives observed", text)
+            if self.current_turn_trace is not None:
+                self.current_turn_trace.response_decision = CamelResponseTrace(
+                    allowed=decision.allowed,
+                    reason=decision.reason,
+                    original_preview=_truncate(text, 180),
+                    final_preview=_truncate(decision.content, 180),
+                )
+            return decision
 
         operator_request = self.current_plan.operator_request or ""
         if _OUTPUT_ANALYSIS_CONTEXT_RE.search(operator_request):
-            return CamelResponseDecision(
+            decision = CamelResponseDecision(
                 True,
                 "Operator explicitly requested analysis or quotation of hidden content",
                 text,
             )
+            if self.current_turn_trace is not None:
+                self.current_turn_trace.response_decision = CamelResponseTrace(
+                    allowed=decision.allowed,
+                    reason=decision.reason,
+                    original_preview=_truncate(text, 180),
+                    final_preview=_truncate(decision.content, 180),
+                )
+            return decision
 
         normalized_request = _normalize_for_match(operator_request)
         matched: List[str] = []
@@ -663,7 +828,15 @@ class CamelGuard:
 
         sanitized = sanitized.strip()
         if not matched:
-            return CamelResponseDecision(True, "No response hijack markers detected", text)
+            decision = CamelResponseDecision(True, "No response hijack markers detected", text)
+            if self.current_turn_trace is not None:
+                self.current_turn_trace.response_decision = CamelResponseTrace(
+                    allowed=decision.allowed,
+                    reason=decision.reason,
+                    original_preview=_truncate(text, 180),
+                    final_preview=_truncate(decision.content, 180),
+                )
+            return decision
 
         if not sanitized:
             sanitized = (
@@ -671,12 +844,21 @@ class CamelGuard:
                 "Use only the visible application information."
             )
 
-        return CamelResponseDecision(
+        decision = CamelResponseDecision(
             False,
             "Blocked by CaMeL guard: assistant response echoed output directives from untrusted content",
             sanitized,
             matched_markers=matched,
         )
+        if self.current_turn_trace is not None:
+            self.current_turn_trace.response_decision = CamelResponseTrace(
+                allowed=decision.allowed,
+                reason=decision.reason,
+                matched_markers=list(decision.matched_markers),
+                original_preview=_truncate(text, 180),
+                final_preview=_truncate(decision.content, 180),
+            )
+        return decision
 
     def wrap_tool_result(self, tool_name: str, content: str) -> tuple[str, bool]:
         if not self.config.enabled or self.config.mode == "off":
@@ -724,3 +906,24 @@ class CamelGuard:
                 )
 
         return wrapped, True
+
+    def trace_summary(self) -> Dict[str, Any]:
+        policy_alert_count = 0
+        response_alert_count = 0
+        for turn in self.trace_turns:
+            policy_alert_count += sum(1 for td in turn.tool_decisions if not td.allowed)
+            if turn.response_decision and not turn.response_decision.allowed:
+                response_alert_count += 1
+        return {
+            "turn_count": len(self.trace_turns),
+            "policy_alert_count": policy_alert_count,
+            "response_alert_count": response_alert_count,
+        }
+
+    def trace_payload(self) -> Dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "runtime_mode": self.config.mode if self.config.enabled else "off",
+            "summary": self.trace_summary(),
+            "turns": [asdict(turn) for turn in self.trace_turns],
+        }
