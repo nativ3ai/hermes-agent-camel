@@ -1217,6 +1217,12 @@ def cmd_camel(args):
         print(markdown, end="" if markdown.endswith("\n") else "\n")
         return
 
+    if action == "update":
+        # Reuse the standard updater so CaMeL users can pull newest repo
+        # changes with a discoverable command under the camel namespace.
+        cmd_update(args)
+        return
+
 
 def cmd_gateway(args):
     """Gateway management commands."""
@@ -8290,6 +8296,9 @@ Examples:
 
     camel_subparsers.add_parser(
         "benchmark", help="Run CaMeL benchmark comparison and print markdown report"
+    )
+    camel_subparsers.add_parser(
+        "update", help="Update Hermes/CaMeL code to the latest version"
     )
     camel_parser.set_defaults(func=cmd_camel)
 

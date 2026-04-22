@@ -39,6 +39,22 @@ def test_camel_benchmark_subcommand_renders_markdown(monkeypatch, capsys):
     assert capsys.readouterr().out == "# benchmark\n"
 
 
+def test_camel_update_subcommand_delegates_to_cmd_update(monkeypatch):
+    import hermes_cli.main as main_mod
+
+    captured = {}
+
+    def _fake_update(args):
+        captured["camel_action"] = getattr(args, "camel_action", None)
+
+    monkeypatch.setattr(main_mod, "cmd_update", _fake_update)
+    monkeypatch.setattr(sys, "argv", ["hermes", "camel", "update"])
+
+    main_mod.main()
+
+    assert captured == {"camel_action": "update"}
+
+
 def test_chat_parser_accepts_camel_guard_monitor(monkeypatch):
     import hermes_cli.main as main_mod
 
