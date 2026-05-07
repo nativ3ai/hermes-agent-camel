@@ -16,6 +16,7 @@ Key design decisions:
 
 import json
 import logging
+import os
 import random
 import re
 import sqlite3
@@ -179,9 +180,21 @@ class SessionDB:
     # Attempt a PASSIVE WAL checkpoint every N successful writes.
     _CHECKPOINT_EVERY_N_WRITES = 50
 
-    def __init__(self, db_path: Path = None):
+    @staticmethod
+    def _env_bool(name: str, default: bool) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+    def __init__(self, db_path: Path = None, enable_trigram_fts: Optional[bool] = None):
         self.db_path = db_path or DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._enable_trigram_fts = (
+            self._env_bool("HERMES_ENABLE_TRIGRAM_FTS", True)
+            if enable_trigram_fts is None
+            else bool(enable_trigram_fts)
+        )
 
         self._lock = threading.Lock()
         self._write_count = 0
@@ -404,6 +417,23 @@ class SessionDB:
         # column gets created here.
         self._reconcile_columns(cursor)
 
+        # If trigram indexing is disabled, drop the full trigram FTS stack so
+        # future inserts do not duplicate index writes.
+        if not self._enable_trigram_fts:
+            for _trig in (
+                "messages_fts_trigram_insert",
+                "messages_fts_trigram_delete",
+                "messages_fts_trigram_update",
+            ):
+                try:
+                    cursor.execute(f"DROP TRIGGER IF EXISTS {_trig}")
+                except sqlite3.OperationalError:
+                    pass
+            try:
+                cursor.execute("DROP TABLE IF EXISTS messages_fts_trigram")
+            except sqlite3.OperationalError:
+                pass
+
         # ── Schema version bookkeeping ─────────────────────────────────
         # Bump to current so future data migrations (if any) can gate on
         # version.  No version-gated column additions remain.
@@ -425,17 +455,18 @@ class SessionDB:
                 # virtual table + triggers are created unconditionally via
                 # FTS_TRIGRAM_SQL below, but existing rows need a one-time
                 # backfill into the FTS index.
-                try:
-                    cursor.execute("SELECT * FROM messages_fts_trigram LIMIT 0")
-                    _fts_trigram_exists = True
-                except sqlite3.OperationalError:
-                    _fts_trigram_exists = False
-                if not _fts_trigram_exists:
-                    cursor.executescript(FTS_TRIGRAM_SQL)
-                    cursor.execute(
-                        "INSERT INTO messages_fts_trigram(rowid, content) "
-                        "SELECT id, content FROM messages WHERE content IS NOT NULL"
-                    )
+                if self._enable_trigram_fts:
+                    try:
+                        cursor.execute("SELECT * FROM messages_fts_trigram LIMIT 0")
+                        _fts_trigram_exists = True
+                    except sqlite3.OperationalError:
+                        _fts_trigram_exists = False
+                    if not _fts_trigram_exists:
+                        cursor.executescript(FTS_TRIGRAM_SQL)
+                        cursor.execute(
+                            "INSERT INTO messages_fts_trigram(rowid, content) "
+                            "SELECT id, content FROM messages WHERE content IS NOT NULL"
+                        )
             if current_version < 11:
                 # v11: re-index FTS5 tables to cover tool_name + tool_calls and
                 # switch from external-content to inline mode. Existing DBs have
@@ -463,7 +494,8 @@ class SessionDB:
                 # Recreate virtual tables + triggers with the new inline-mode
                 # schema that indexes content || tool_name || tool_calls.
                 cursor.executescript(FTS_SQL)
-                cursor.executescript(FTS_TRIGRAM_SQL)
+                if self._enable_trigram_fts:
+                    cursor.executescript(FTS_TRIGRAM_SQL)
                 # Backfill both indexes from every existing messages row.
                 cursor.execute(
                     "INSERT INTO messages_fts(rowid, content) "
@@ -473,14 +505,15 @@ class SessionDB:
                     "COALESCE(tool_calls, '') "
                     "FROM messages"
                 )
-                cursor.execute(
-                    "INSERT INTO messages_fts_trigram(rowid, content) "
-                    "SELECT id, "
-                    "COALESCE(content, '') || ' ' || "
-                    "COALESCE(tool_name, '') || ' ' || "
-                    "COALESCE(tool_calls, '') "
-                    "FROM messages"
-                )
+                if self._enable_trigram_fts:
+                    cursor.execute(
+                        "INSERT INTO messages_fts_trigram(rowid, content) "
+                        "SELECT id, "
+                        "COALESCE(content, '') || ' ' || "
+                        "COALESCE(tool_name, '') || ' ' || "
+                        "COALESCE(tool_calls, '') "
+                        "FROM messages"
+                    )
             if current_version < SCHEMA_VERSION:
                 cursor.execute(
                     "UPDATE schema_version SET version = ?",
@@ -502,11 +535,12 @@ class SessionDB:
         except sqlite3.OperationalError:
             cursor.executescript(FTS_SQL)
 
-        # Trigram FTS5 for CJK/substring search
-        try:
-            cursor.execute("SELECT * FROM messages_fts_trigram LIMIT 0")
-        except sqlite3.OperationalError:
-            cursor.executescript(FTS_TRIGRAM_SQL)
+        # Trigram FTS5 for CJK/substring search (opt-in).
+        if self._enable_trigram_fts:
+            try:
+                cursor.execute("SELECT * FROM messages_fts_trigram LIMIT 0")
+            except sqlite3.OperationalError:
+                cursor.executescript(FTS_TRIGRAM_SQL)
 
         self._conn.commit()
 
@@ -1749,6 +1783,37 @@ class SessionDB:
         if is_cjk:
             raw_query = query.strip('"').strip()
             cjk_count = self._count_cjk(raw_query)
+            def _run_cjk_like_fallback() -> List[Dict[str, Any]]:
+                escaped = raw_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                like_where = ["(m.content LIKE ? ESCAPE '\\' OR m.tool_name LIKE ? ESCAPE '\\' OR m.tool_calls LIKE ? ESCAPE '\\')"]
+                like_params: list = [f"%{escaped}%", f"%{escaped}%", f"%{escaped}%"]
+                if source_filter is not None:
+                    like_where.append(f"s.source IN ({','.join('?' for _ in source_filter)})")
+                    like_params.extend(source_filter)
+                if exclude_sources is not None:
+                    like_where.append(f"s.source NOT IN ({','.join('?' for _ in exclude_sources)})")
+                    like_params.extend(exclude_sources)
+                if role_filter:
+                    like_where.append(f"m.role IN ({','.join('?' for _ in role_filter)})")
+                    like_params.extend(role_filter)
+                like_sql = f"""
+                    SELECT m.id, m.session_id, m.role,
+                           substr(m.content,
+                                  max(1, instr(m.content, ?) - 40),
+                                  120) AS snippet,
+                           m.content, m.timestamp, m.tool_name,
+                           s.source, s.model, s.started_at AS session_started
+                    FROM messages m
+                    JOIN sessions s ON s.id = m.session_id
+                    WHERE {' AND '.join(like_where)}
+                    ORDER BY m.timestamp DESC
+                    LIMIT ? OFFSET ?
+                """
+                like_params.extend([limit, offset])
+                like_params = [raw_query] + like_params
+                with self._lock:
+                    like_cursor = self._conn.execute(like_sql, like_params)
+                    return [dict(row) for row in like_cursor.fetchall()]
 
             if cjk_count >= 3:
                 # Trigram FTS5 path — quote each non-operator token to handle
@@ -1793,47 +1858,23 @@ class SessionDB:
                     LIMIT ? OFFSET ?
                 """
                 tri_params.extend([limit, offset])
+                tri_rows: Optional[List[Dict[str, Any]]] = None
+                tri_missing = False
                 with self._lock:
                     try:
                         tri_cursor = self._conn.execute(tri_sql, tri_params)
                     except sqlite3.OperationalError:
-                        matches = []
+                        tri_missing = True
                     else:
-                        matches = [dict(row) for row in tri_cursor.fetchall()]
+                        tri_rows = [dict(row) for row in tri_cursor.fetchall()]
+                if tri_missing:
+                    matches = _run_cjk_like_fallback()
+                else:
+                    matches = tri_rows or []
             else:
                 # Short CJK query (1-2 chars) — trigram needs ≥3 CJK chars.
                 # Fall back to LIKE substring search.
-                escaped = raw_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                like_where = ["(m.content LIKE ? ESCAPE '\\' OR m.tool_name LIKE ? ESCAPE '\\' OR m.tool_calls LIKE ? ESCAPE '\\')"]
-                like_params: list = [f"%{escaped}%", f"%{escaped}%", f"%{escaped}%"]
-                if source_filter is not None:
-                    like_where.append(f"s.source IN ({','.join('?' for _ in source_filter)})")
-                    like_params.extend(source_filter)
-                if exclude_sources is not None:
-                    like_where.append(f"s.source NOT IN ({','.join('?' for _ in exclude_sources)})")
-                    like_params.extend(exclude_sources)
-                if role_filter:
-                    like_where.append(f"m.role IN ({','.join('?' for _ in role_filter)})")
-                    like_params.extend(role_filter)
-                like_sql = f"""
-                    SELECT m.id, m.session_id, m.role,
-                           substr(m.content,
-                                  max(1, instr(m.content, ?) - 40),
-                                  120) AS snippet,
-                           m.content, m.timestamp, m.tool_name,
-                           s.source, s.model, s.started_at AS session_started
-                    FROM messages m
-                    JOIN sessions s ON s.id = m.session_id
-                    WHERE {' AND '.join(like_where)}
-                    ORDER BY m.timestamp DESC
-                    LIMIT ? OFFSET ?
-                """
-                like_params.extend([limit, offset])
-                # instr() parameter goes first in the bound list
-                like_params = [raw_query] + like_params
-                with self._lock:
-                    like_cursor = self._conn.execute(like_sql, like_params)
-                    matches = [dict(row) for row in like_cursor.fetchall()]
+                matches = _run_cjk_like_fallback()
         else:
             with self._lock:
                 try:
@@ -2126,6 +2167,49 @@ class SessionDB:
             self._remove_session_files(sessions_dir, sid)
         return count
 
+    def prune_tool_messages(self, older_than_days: int = 30) -> int:
+        """Delete old tool-role rows from ended sessions and return row count.
+
+        Targets the largest growth driver in state.db while preserving active
+        sessions and all user/assistant turns.
+        """
+        if older_than_days < 0:
+            return 0
+        cutoff = time.time() - (older_than_days * 86400)
+
+        def _do(conn):
+            cursor = conn.execute(
+                """
+                DELETE FROM messages
+                WHERE role = 'tool'
+                  AND timestamp < ?
+                  AND session_id IN (
+                      SELECT id FROM sessions WHERE ended_at IS NOT NULL
+                  )
+                """,
+                (cutoff,),
+            )
+            deleted = cursor.rowcount if cursor.rowcount is not None else 0
+            if deleted > 0:
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET message_count = (
+                        SELECT COUNT(*) FROM messages m WHERE m.session_id = sessions.id
+                    ),
+                    tool_call_count = (
+                        SELECT COUNT(*) FROM messages m WHERE m.session_id = sessions.id
+                          AND m.tool_calls IS NOT NULL
+                    )
+                    WHERE id IN (
+                        SELECT id FROM sessions WHERE ended_at IS NOT NULL
+                    )
+                    """
+                )
+            return deleted
+
+        return self._execute_write(_do)
+
     # ── Meta key/value (for scheduler bookkeeping) ──
 
     def get_meta(self, key: str) -> Optional[str]:
@@ -2178,6 +2262,8 @@ class SessionDB:
         retention_days: int = 90,
         min_interval_hours: int = 24,
         vacuum: bool = True,
+        prune_tool_messages: bool = False,
+        tool_message_retention_days: int = 30,
         sessions_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """Idempotent auto-maintenance: prune old sessions + optional VACUUM.
@@ -2199,7 +2285,12 @@ class SessionDB:
           - ``"vacuumed"`` (bool) — true if VACUUM ran
           - ``"error"`` (str, optional) — present only on failure
         """
-        result: Dict[str, Any] = {"skipped": False, "pruned": 0, "vacuumed": False}
+        result: Dict[str, Any] = {
+            "skipped": False,
+            "pruned": 0,
+            "pruned_tool_messages": 0,
+            "vacuumed": False,
+        }
         try:
             # Skip if another process/call did maintenance recently.
             last_raw = self.get_meta("last_auto_prune")
@@ -2219,9 +2310,14 @@ class SessionDB:
             )
             result["pruned"] = pruned
 
+            if prune_tool_messages:
+                result["pruned_tool_messages"] = self.prune_tool_messages(
+                    older_than_days=tool_message_retention_days
+                )
+
             # Only VACUUM if we actually freed rows — VACUUM on a tight DB
             # is wasted I/O. Threshold keeps small DBs from paying the cost.
-            if vacuum and pruned > 0:
+            if vacuum and (pruned > 0 or result["pruned_tool_messages"] > 0):
                 try:
                     self.vacuum()
                     result["vacuumed"] = True
@@ -2245,4 +2341,3 @@ class SessionDB:
             result["error"] = str(exc)
 
         return result
-
