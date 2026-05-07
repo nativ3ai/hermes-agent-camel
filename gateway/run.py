@@ -1118,6 +1118,8 @@ class GatewayRunner:
                         retention_days=int(_sess_cfg.get("retention_days", 90)),
                         min_interval_hours=int(_sess_cfg.get("min_interval_hours", 24)),
                         vacuum=bool(_sess_cfg.get("vacuum_after_prune", True)),
+                        prune_tool_messages=bool(_sess_cfg.get("prune_tool_messages", False)),
+                        tool_message_retention_days=int(_sess_cfg.get("tool_message_retention_days", 30)),
                         sessions_dir=self.config.sessions_dir,
                     )
             except Exception as exc:

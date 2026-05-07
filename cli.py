@@ -956,6 +956,8 @@ def _run_state_db_auto_maintenance(session_db) -> None:
             retention_days=int(cfg.get("retention_days", 90)),
             min_interval_hours=int(cfg.get("min_interval_hours", 24)),
             vacuum=bool(cfg.get("vacuum_after_prune", True)),
+            prune_tool_messages=bool(cfg.get("prune_tool_messages", False)),
+            tool_message_retention_days=int(cfg.get("tool_message_retention_days", 30)),
             sessions_dir=_hermes_home_maint / "sessions",
         )
     except Exception as exc:

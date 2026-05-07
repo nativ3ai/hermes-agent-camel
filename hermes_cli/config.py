@@ -1259,6 +1259,12 @@ DEFAULT_CONFIG = {
         # 100MB, so it only runs at startup, and only when prune deleted
         # ≥1 session.
         "vacuum_after_prune": True,
+        # Optionally prune tool-role messages from ended sessions. This is a
+        # targeted control for state.db growth in tool-heavy workflows.
+        "prune_tool_messages": False,
+        # Retention window (days) for tool-role messages when
+        # prune_tool_messages is enabled.
+        "tool_message_retention_days": 30,
         # Minimum hours between auto-maintenance runs (avoids repeating
         # the sweep on every CLI invocation).  Tracked via state_meta in
         # state.db itself, so it's shared across all processes.

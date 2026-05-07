@@ -1421,6 +1421,20 @@ class TestSchemaInit:
         columns = {row[1] for row in cursor.fetchall()}
         assert "title" in columns
 
+    def test_trigram_fts_can_be_disabled_explicitly(self, tmp_path):
+        from hermes_state import SessionDB
+        db = SessionDB(db_path=tmp_path / "state.db", enable_trigram_fts=False)
+        try:
+            cursor = db._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts_trigram'"
+            )
+            assert cursor.fetchone() is None
+            db.create_session(session_id="s1", source="cli")
+            db.append_message("s1", role="user", content="记忆断裂问题")
+            assert len(db.search_messages("记忆断裂")) == 1
+        finally:
+            db.close()
+
     def test_migration_from_v2(self, tmp_path):
         """Simulate a v2 database and verify migration adds title column."""
         import sqlite3
@@ -2478,6 +2492,35 @@ class TestAutoMaintenance:
         assert not (sessions_dir / "old.jsonl").exists()
         assert (sessions_dir / "active.jsonl").exists()
 
+    def test_prune_tool_messages_only_deletes_old_ended_tool_rows(self, db):
+        self._make_old_ended(db, "old", days_old=100)
+        db.create_session(session_id="active", source="cli")
+        old_ts = time.time() - 60 * 86400
+        fresh_ts = time.time() - 1 * 86400
+        db._conn.execute(
+            "INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, 'tool', ?, ?)",
+            ("old", "old tool output", old_ts),
+        )
+        db._conn.execute(
+            "INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, 'tool', ?, ?)",
+            ("active", "active tool output", old_ts),
+        )
+        db._conn.execute(
+            "INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, 'tool', ?, ?)",
+            ("old", "fresh tool output", fresh_ts),
+        )
+        db._conn.commit()
+
+        deleted = db.prune_tool_messages(older_than_days=30)
+        assert deleted == 1
+        rows = db._conn.execute(
+            "SELECT session_id, content FROM messages WHERE role='tool' ORDER BY content"
+        ).fetchall()
+        tuples = [(r[0], r[1]) for r in rows]
+        assert ("old", "old tool output") not in tuples
+        assert ("active", "active tool output") in tuples
+        assert ("old", "fresh tool output") in tuples
+
 
 # =========================================================================
 # FTS5 indexing of tool_calls / tool_name (#16751)
@@ -2672,4 +2715,3 @@ class TestFTS5ToolCallMigration:
             assert version == 11
         finally:
             session_db.close()
-
