@@ -50,6 +50,7 @@ _PROVIDER_PREFIXES: frozenset[str] = frozenset({
     "opencode-zen", "opencode-go", "ai-gateway", "kilocode", "alibaba",
     "qwen-oauth",
     "xiaomi",
+    "evolink",
     "arcee",
     "gmi",
     "tencent-tokenhub",
@@ -315,6 +316,8 @@ _URL_TO_PROVIDER: Dict[str, str] = {
     "xiaomimimo.com": "xiaomi",
     "api.gmi-serving.com": "gmi",
     "tokenhub.tencentmaas.com": "tencent-tokenhub",
+    "direct.evolink.ai": "evolink",
+    "evolink.ai": "evolink",
     "ollama.com": "ollama-cloud",
 }
 

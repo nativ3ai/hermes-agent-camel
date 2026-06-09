@@ -199,6 +199,10 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         transport="bedrock_converse",
         auth_type="aws_sdk",
     ),
+    "evolink": HermesOverlay(
+        transport="openai_chat",
+        base_url_env_var="EVOLINK_BASE_URL",
+    ),
 }
 
 
@@ -325,6 +329,9 @@ ALIASES: Dict[str, str] = {
     "amazon-bedrock": "bedrock",
     "amazon": "bedrock",
 
+    # evolink
+    "evolinkai": "evolink",
+
     # arcee
     "arcee-ai": "arcee",
     "arceeai": "arcee",
@@ -357,6 +364,7 @@ _LABEL_OVERRIDES: Dict[str, str] = {
     "xiaomi": "Xiaomi MiMo",
     "gmi": "GMI Cloud",
     "tencent-tokenhub": "Tencent TokenHub",
+    "evolink": "Evolink",
     "lmstudio": "LM Studio",
     "local": "Local endpoint",
     "bedrock": "AWS Bedrock",
