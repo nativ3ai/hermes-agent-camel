@@ -1684,6 +1684,21 @@ OPTIONAL_ENV_VARS = {
         "category": "provider",
         "advanced": True,
     },
+    "EVOLINK_API_KEY": {
+        "description": "Evolink API key for multi-model AI gateway (GPT-5, Gemini, Claude, DeepSeek, MiniMax models via OpenAI-compatible API)",
+        "prompt": "Evolink API Key",
+        "url": "https://evolink.ai/dashboard/keys",
+        "password": True,
+        "category": "provider",
+    },
+    "EVOLINK_BASE_URL": {
+        "description": "Evolink base URL override (default: https://direct.evolink.ai/v1)",
+        "prompt": "Evolink base URL (leave empty for default)",
+        "url": None,
+        "password": False,
+        "category": "provider",
+        "advanced": True,
+    },
     "AWS_REGION": {
         "description": "AWS region for Bedrock API calls (e.g. us-east-1, eu-central-1)",
         "prompt": "AWS Region",
