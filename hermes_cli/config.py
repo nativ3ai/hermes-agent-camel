@@ -1685,7 +1685,7 @@ OPTIONAL_ENV_VARS = {
         "advanced": True,
     },
     "EVOLINK_API_KEY": {
-        "description": "Evolink API key for multi-model AI gateway (GPT-5, Gemini, Claude, DeepSeek, MiniMax models via OpenAI-compatible API)",
+        "description": "Evolink API key for multi-model AI gateway (GPT-5, Gemini, DeepSeek, Doubao Seed models via OpenAI-compatible API)",
         "prompt": "Evolink API Key",
         "url": "https://evolink.ai/dashboard/keys",
         "password": True,

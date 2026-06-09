@@ -201,7 +201,6 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
     ),
     "evolink": HermesOverlay(
         transport="openai_chat",
-        is_aggregator=True,
         base_url_env_var="EVOLINK_BASE_URL",
     ),
 }

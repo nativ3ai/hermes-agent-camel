@@ -244,7 +244,7 @@ class TestEvolinkProvidersModule:
         overlay = HERMES_OVERLAYS["evolink"]
         assert overlay.transport == "openai_chat"
         assert overlay.base_url_env_var == "EVOLINK_BASE_URL"
-        assert overlay.is_aggregator
+        assert not overlay.is_aggregator
 
     def test_alias_resolves(self):
         from hermes_cli.providers import normalize_provider
